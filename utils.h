@@ -1,0 +1,22 @@
+/* SPDX-License-Identifier: MIT */
+#ifndef UTILS_H
+#define UTILS_H
+#include <stddef.h>
+
+#define ABS(X)    ((X) < 0 ? -(X) : (X))
+#define MAX(A, B) ((A) > (B) ? (A) : (B))
+#define MIN(A, B) ((A) < (B) ? (A) : (B))
+#define LENGTH(A) (sizeof(A) / sizeof((A)[0]))
+#define MSEC_TO_CLOCKS(MSEC) ((MSEC) * 1000)
+#define test_flag(FLAGS, FLAG) ((FLAGS) & (FLAG))
+
+int align(int num, int min, int max);
+void die(const char *msg, ...);
+void *ecalloc(size_t nmenb, size_t size);
+void *erealloc(void *p, size_t s);
+
+size_t _arealloc(void **p, size_t n, size_t o);
+/* auto realloc when only n > o */
+#define arealloc(P, N, O) _arealloc((void**)(P), N, O)
+
+#endif
