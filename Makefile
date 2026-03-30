@@ -6,18 +6,18 @@ PREFIX = /usr/local
 
 TARGET_DIR = $(PREFIX)/bin
 
-TARGET = sved
+TARGET = meo
 
-SRC = sved.c utils.c $(wildcard include/*.c)
+SRC = meo.c utils.c $(wildcard include/*.c)
 OBJ = $(SRC:.c=.o)
 
 .PHONY: all clean install uninstall
 all: $(TARGET)
 
-%.o: %.c config.h sved.h $(wildcard include/*.h)
+%.o: %.c config.h
 	$(CC) -c $(CFLAGS) $< -o $@
 
-$(TARGET): $(OBJ)
+$(TARGET): meo.h $(OBJ) $(wildcard include/*.h)
 	$(CC) -o $@ $(OBJ)
 
 clean:

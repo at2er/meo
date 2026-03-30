@@ -9,6 +9,8 @@
  *     - #define UTILSH_STR_DIE <your error handle function call>
  *        default: abort()
  *
+ *     - #define UTILSH_STR_REMOVE_MIN <unsigned int> (impl)
+ *        default: 128
  */
 #ifndef UTILSH_STR_H
 #define UTILSH_STR_H
@@ -87,6 +89,11 @@ extern struct str *str_insert_str(struct str *dst, size_t pos, struct str *str);
  * @return: [s], if it succeeds, otherwise NULL. */
 extern struct str *str_realloc(struct str *s, size_t siz);
 
+/* Remove [len] from 's->s[pos]' (include 's->s[pos]').
+ *
+ * @return: [s], if it succeeds, otherwise NULL. */
+extern struct str *str_remove(struct str *s, size_t pos, size_t len);
+
 /* Like default str functions, but always call exit(1) when failed,
  * and their return value is always not NULL.
  * If you don't need this make your program fat,
@@ -140,6 +147,9 @@ extern struct str *estr_insert_str(struct str *dst, size_t pos, struct str *str)
  * @return: [s] */
 extern struct str *estr_realloc(struct str *s, size_t siz);
 
+/* @return: [s] */
+extern struct str *estr_remove(struct str *s, size_t pos, size_t len);
+
 #endif /* UTILSH_DISABLE_ESTR */
 
 #endif /* UTILSH_STR_H */
@@ -154,6 +164,10 @@ extern struct str *estr_realloc(struct str *s, size_t siz);
 #include <stddef.h>
 #include <stdlib.h>
 #include <string.h>
+
+#ifndef UTILSH_STR_REMOVE_MIN
+#define UTILSH_STR_REMOVE_MIN 128
+#endif
 
 /* @return: [s], if it succeeds, otherwise NULL. */
 struct str *
@@ -287,6 +301,25 @@ str_realloc(struct str *s, size_t siz)
 	return s;
 }
 
+struct str *
+str_remove(struct str *s, size_t pos, size_t len)
+{
+	if (!s)
+		return NULL;
+	if (pos > s->len)
+		return NULL;
+	s->len -= len;
+	// helloworld
+	// 0123456789
+	//    ^^^
+	// hel   orld
+	// helorld
+	// 0123456
+	memmove(&s->s[pos], &s->s[pos + len], s->len - pos);
+	s->s[s->len] = '\0';
+	return s;
+}
+
 #ifndef UTILSH_DISABLE_ESTR
 #include <stdio.h>
 
@@ -339,6 +372,10 @@ estr_insert_str(struct str *dst, size_t pos, struct str *str)
 struct str *
 estr_realloc(struct str *s, size_t siz)
 	T(str_realloc, s, siz)
+
+struct str *
+estr_remove(struct str *s, size_t pos, size_t len)
+	T(str_remove, s, pos, len)
 
 #undef T
 

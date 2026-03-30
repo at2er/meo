@@ -22,7 +22,8 @@ struct fbuf {
 };
 
 struct line {
-	struct str l;
+	struct str s;
+	int n;
 	char r[VLINE_RENDER_MAX];
 
 	struct utilsh_list link;
@@ -45,6 +46,8 @@ struct win {
 /* key functions */
 static void insert(const union arg *arg);
 static void mode(const union arg *arg);
+static void move_col(const union arg *arg);
+static void move_row(const union arg *arg);
 static void quit(const union arg *arg);
 
 /* command functions */

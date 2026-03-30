@@ -15,7 +15,7 @@
 
 #include "getarg.h"
 #include "sctui.h"
-#include "sved.h"
+#include "meo.h"
 #include "utils.h"
 
 #define ARG(...) (union arg){__VA_ARGS__}
@@ -26,10 +26,11 @@ static void fini(void);
 static const struct key *get_keys_table(void);
 static void init(void);
 static void keypress(void);
+static void new_line(void);
 static void render_line(struct line *l);
 
 static const char *usages[] = {
-"Usage: sved [OPTIONS] [FILE]",
+"Usage: meo [OPTIONS] [FILE]",
 "",
 "Options:",
 "  -h, --help: show usages",
@@ -64,6 +65,8 @@ draw(void)
 {
 	for (int i = 0; i < nwin; i++)
 		draw_win(&wins[i]);
+	sctui_move(ctab->w->x + ctab->w->ccol,
+			ctab->w->y + ctab->w->crow);
 	sctui_commit();
 }
 
@@ -163,15 +166,42 @@ keypress(void)
 }
 
 void
+new_line(void)
+{
+	struct line *l, *prv = ctab->w->l;
+	struct str s;
+
+	// TODO: renumber the [n] of line
+	if (!prv) {
+		prv = ecalloc(1, sizeof(*prv));
+		utilsh_list_insert(&ctab->w->fb->lines,
+				ctab->w->fb->lines.end, &prv->link);
+	}
+
+	*prv->r = 0;
+	l = ecalloc(1, sizeof(*l));
+	*l->r = 0;
+	utilsh_list_insert(&ctab->w->fb->lines, &prv->link, &l->link);
+	ctab->w->l = l;
+
+	s.s = prv->s.s + ctab->w->ccol;
+	s.len = prv->s.len - ctab->w->ccol;
+	s.siz = s.len + 1;
+	if (s.len > 0)
+		estr_append_str(&l->s, &s);
+	estr_remove(&prv->s, ctab->w->ccol, s.len - 1);
+}
+
+void
 render_line(struct line *l)
 {
 	if (*l->r != 0)
 		return;
 	for (size_t i = 0; i < VLINE_RENDER_MAX; i++) {
-		if (i < l->l.len)
-			l->r[i] = l->l.s[i];
-		else
+		if (i >= l->s.len || l->s.s[i] == '\n')
 			l->r[i] = ' ';
+		else
+			l->r[i] = l->s.s[i];
 	}
 }
 
@@ -188,13 +218,57 @@ insert(const union arg *arg)
 		ctab->w->l = l;
 	}
 	*l->r = 0;
-	estr_insert_cstr(&l->l, ctab->w->ccol, arg->s);
+
+	for (const char *c = arg->s; *c; c++) {
+		if (*c == '\n')
+			new_line();
+	}
 }
 
 void
 mode(const union arg *arg)
 {
 	cmode = arg->i;
+}
+
+void
+move_col(const union arg *arg)
+{
+	int max;
+
+	if (ctab->w->l)
+		max = ctab->w->l->s.len;
+	else
+		max = 0;
+
+	ctab->w->ccol += arg->i;
+	ctab->w->ccol = align(ctab->w->ccol, 0, max);
+}
+
+void
+move_row(const union arg *arg)
+{
+	struct line *end;
+	int i, max;
+
+	end = utilsh_list_container_of(ctab->w->fb->lines.end,
+			struct line, link);
+	if (end)
+		max = end->n + 1;
+	else
+		max = 0;
+
+	ctab->w->crow += arg->i;
+	ctab->w->crow = align(ctab->w->crow, 0, max);
+	utilsh_list_for_each(struct line, l,
+			&ctab->w->fb->lines.beg,
+			tmp, link) {
+		if (i >= ctab->w->crow) {
+			ctab->w->l = l;
+			break;
+		}
+		i++;
+	}
 }
 
 void
@@ -210,6 +284,7 @@ cmd_edit(int argc, const char *argv[])
 	struct fbuf *fb;
 	FILE *fp;
 	struct line *l;
+	int n;
 
 	if (argc > 1 && argv) {
 		for (int i = 0; i < nfb; i++) {
@@ -236,9 +311,10 @@ cmd_edit(int argc, const char *argv[])
 	if (!(fp = fopen(fb->path, "r")))
 		return 0;
 
-	while (fgets(gsbuf, BUFSIZ, fp)) {
+	for (n = 0; fgets(gsbuf, BUFSIZ, fp); n++) {
 		l = ecalloc(1, sizeof(*l));
-		estr_from_cstr(&l->l, gsbuf);
+		l->n = n;
+		estr_from_cstr(&l->s, gsbuf);
 		*l->r = 0;
 		utilsh_list_insert(&fb->lines, fb->lines.end, &l->link);
 	}
