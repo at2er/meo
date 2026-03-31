@@ -18,12 +18,12 @@ struct cmd {
 
 struct fbuf {
 	struct utilsh_list_head lines;
+	int nline;
 	char path[FILENAME_MAX];
 };
 
 struct line {
 	struct str s;
-	int n;
 	char r[VLINE_RENDER_MAX];
 
 	struct utilsh_list link;

@@ -28,6 +28,7 @@ static void init(void);
 static void keypress(void);
 static void new_line(void);
 static void render_line(struct line *l);
+static void scroll(struct win *w);
 
 static const char *usages[] = {
 "Usage: meo [OPTIONS] [FILE]",
@@ -149,8 +150,10 @@ keypress(void)
 		skb_ncombo = 0;
 		return;
 	}
-	if (cmode != 'i')
+	if (cmode != 'i') {
+		skb_ncombo = 0;
 		return;
+	}
 
 	buf = gsbuf;
 	for (int i = 0; i < skb_ncombo; i++) {
@@ -171,18 +174,18 @@ new_line(void)
 	struct line *l, *prv = ctab->w->l;
 	struct str s;
 
-	// TODO: renumber the [n] of line
 	if (!prv) {
 		prv = ecalloc(1, sizeof(*prv));
 		utilsh_list_insert(&ctab->w->fb->lines,
 				ctab->w->fb->lines.end, &prv->link);
+		ctab->w->fb->nline++;
 	}
 
 	*prv->r = 0;
 	l = ecalloc(1, sizeof(*l));
 	*l->r = 0;
 	utilsh_list_insert(&ctab->w->fb->lines, &prv->link, &l->link);
-	ctab->w->l = l;
+	ctab->w->fb->nline++;
 
 	s.s = prv->s.s + ctab->w->ccol;
 	s.len = prv->s.len - ctab->w->ccol;
@@ -190,6 +193,9 @@ new_line(void)
 	if (s.len > 0)
 		estr_append_str(&l->s, &s);
 	estr_remove(&prv->s, ctab->w->ccol, s.len - 1);
+
+	ctab->w->ccol = 0;
+	move_row(&ARG(.i = 1));
 }
 
 void
@@ -205,6 +211,29 @@ render_line(struct line *l)
 	}
 }
 
+void
+scroll(struct win *w)
+{
+	int i = 0, max;
+
+	w->crow = align(w->crow, 0, w->fb->nline - 1);
+	utilsh_list_for_each(struct line, l,
+			w->fb->lines.beg,
+			tmp, link) {
+		if (i >= w->crow) {
+			w->l = l;
+			break;
+		}
+		i++;
+	}
+
+	if (w->l)
+		max = w->l->s.len - 1;
+	else
+		max = 0;
+	w->ccol = align(w->ccol, 0, max);
+}
+
 /* key functions */
 void
 insert(const union arg *arg)
@@ -214,7 +243,9 @@ insert(const union arg *arg)
 	if (!l) {
 		l = ecalloc(1, sizeof(*l));
 		utilsh_list_insert(&ctab->w->fb->lines,
-				ctab->w->fb->lines.end, &l->link);
+				ctab->w->fb->lines.end,
+				&l->link);
+		ctab->w->fb->nline++;
 		ctab->w->l = l;
 	}
 	*l->r = 0;
@@ -234,41 +265,15 @@ mode(const union arg *arg)
 void
 move_col(const union arg *arg)
 {
-	int max;
-
-	if (ctab->w->l)
-		max = ctab->w->l->s.len;
-	else
-		max = 0;
-
 	ctab->w->ccol += arg->i;
-	ctab->w->ccol = align(ctab->w->ccol, 0, max);
+	scroll(ctab->w);
 }
 
 void
 move_row(const union arg *arg)
 {
-	struct line *end;
-	int i, max;
-
-	end = utilsh_list_container_of(ctab->w->fb->lines.end,
-			struct line, link);
-	if (end)
-		max = end->n + 1;
-	else
-		max = 0;
-
 	ctab->w->crow += arg->i;
-	ctab->w->crow = align(ctab->w->crow, 0, max);
-	utilsh_list_for_each(struct line, l,
-			&ctab->w->fb->lines.beg,
-			tmp, link) {
-		if (i >= ctab->w->crow) {
-			ctab->w->l = l;
-			break;
-		}
-		i++;
-	}
+	scroll(ctab->w);
 }
 
 void
@@ -284,7 +289,7 @@ cmd_edit(int argc, const char *argv[])
 	struct fbuf *fb;
 	FILE *fp;
 	struct line *l;
-	int n;
+	int nline;
 
 	if (argc > 1 && argv) {
 		for (int i = 0; i < nfb; i++) {
@@ -303,6 +308,11 @@ cmd_edit(int argc, const char *argv[])
 
 	if (argc <= 1 || !argv) {
 		strcpy(fb->path, "<unnamed>");
+		l = ecalloc(1, sizeof(*l));
+		estr_from_cstr(&l->s, "\n");
+		*l->r = 0;
+		utilsh_list_insert(&fb->lines, fb->lines.end, &l->link);
+		fb->nline = 1;
 		goto setwin;
 	}
 
@@ -311,13 +321,13 @@ cmd_edit(int argc, const char *argv[])
 	if (!(fp = fopen(fb->path, "r")))
 		return 0;
 
-	for (n = 0; fgets(gsbuf, BUFSIZ, fp); n++) {
+	for (nline = 0; fgets(gsbuf, BUFSIZ, fp); nline++) {
 		l = ecalloc(1, sizeof(*l));
-		l->n = n;
 		estr_from_cstr(&l->s, gsbuf);
 		*l->r = 0;
 		utilsh_list_insert(&fb->lines, fb->lines.end, &l->link);
 	}
+	fb->nline = nline;
 
 	fclose(fp);
 
