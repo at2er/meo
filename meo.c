@@ -19,6 +19,8 @@
 #include "utils.h"
 
 #define ARG(...) (union arg){__VA_ARGS__}
+#define refreshl(LREF) (*(LREF)->r = 0)
+#define refreshw(WREF) ((WREF)->refresh = 1)
 
 static void draw(void);
 static void draw_win(struct win *w);
@@ -183,7 +185,7 @@ new_line(void)
 
 	*prv->r = 0;
 	l = ecalloc(1, sizeof(*l));
-	*l->r = 0;
+	refreshl(l);
 	utilsh_list_insert(&ctab->w->fb->lines, &prv->link, &l->link);
 	ctab->w->fb->nline++;
 
@@ -236,10 +238,28 @@ scroll(struct win *w)
 
 /* key functions */
 void
-insert(const union arg *arg)
+delete(const union arg *arg)
 {
 	struct line *l = ctab->w->l;
-	ctab->w->refresh = 1;
+	int pos;
+	if (!l)
+		return;
+	pos = ctab->w->ccol - arg->i;
+	if (pos < 0)
+		return;
+	estr_remove(&l->s, pos, arg->i);
+	refreshl(l);
+	refreshw(ctab->w);
+	move_col(&ARG(.i = -arg->i));
+}
+
+void
+insert(const union arg *arg)
+{
+	const char *c;
+	struct line *l = ctab->w->l;
+	struct str s;
+
 	if (!l) {
 		l = ecalloc(1, sizeof(*l));
 		utilsh_list_insert(&ctab->w->fb->lines,
@@ -248,12 +268,24 @@ insert(const union arg *arg)
 		ctab->w->fb->nline++;
 		ctab->w->l = l;
 	}
-	*l->r = 0;
 
-	for (const char *c = arg->s; *c; c++) {
-		if (*c == '\n')
+	refreshl(l);
+	refreshw(ctab->w);
+
+	s.s = (char*)arg->s;
+	s.len = 0;
+	for (c = arg->s; *c; c++) {
+		if (*c == '\n') {
+			estr_insert_str(&l->s, ctab->w->ccol - 1, &s);
+			s.s = (char*)(c + 1);
+			s.siz = s.len = 0;
 			new_line();
+			continue;
+		}
+		s.len++;
+		ctab->w->ccol++;
 	}
+	estr_insert_str(&l->s, ctab->w->ccol - 1, &s);
 }
 
 void
@@ -310,7 +342,7 @@ cmd_edit(int argc, const char *argv[])
 		strcpy(fb->path, "<unnamed>");
 		l = ecalloc(1, sizeof(*l));
 		estr_from_cstr(&l->s, "\n");
-		*l->r = 0;
+		refreshl(l);
 		utilsh_list_insert(&fb->lines, fb->lines.end, &l->link);
 		fb->nline = 1;
 		goto setwin;
@@ -324,7 +356,7 @@ cmd_edit(int argc, const char *argv[])
 	for (nline = 0; fgets(gsbuf, BUFSIZ, fp); nline++) {
 		l = ecalloc(1, sizeof(*l));
 		estr_from_cstr(&l->s, gsbuf);
-		*l->r = 0;
+		refreshl(l);
 		utilsh_list_insert(&fb->lines, fb->lines.end, &l->link);
 	}
 	fb->nline = nline;
@@ -335,7 +367,7 @@ setwin:
 	ctab->w->crow = ctab->w->ccol = 0;
 	ctab->w->fb = fb;
 	ctab->w->l = utilsh_list_container_of(fb->lines.beg, struct line, link);
-	ctab->w->refresh = 1;
+	refreshw(ctab->w);
 
 	return 0;
 }

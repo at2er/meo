@@ -44,6 +44,7 @@ struct win {
 };
 
 /* key functions */
+static void delete(const union arg *arg);
 static void insert(const union arg *arg);
 static void mode(const union arg *arg);
 static void move_col(const union arg *arg);

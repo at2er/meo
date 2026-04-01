@@ -186,16 +186,13 @@ str_append_chr(struct str *dst, char c)
 struct str *
 str_append_cstr(struct str *dst, const char *cstr)
 {
-	size_t cstr_len;
-	if (!dst || !cstr)
+	struct str fake;
+	if (!cstr)
 		return NULL;
-	cstr_len = strlen(cstr);
-	if (!str_realloc(dst, dst->len + cstr_len + 1))
-		return NULL;
-	memcpy(&dst->s[dst->len], cstr, cstr_len);
-	dst->len += cstr_len;
-	dst->s[dst->len] = '\0';
-	return dst;
+	fake.s = (char*)cstr;
+	fake.len = strlen(cstr);
+	fake.siz = fake.len + 1;
+	return str_append_str(dst, &fake);
 }
 
 struct str *
@@ -278,6 +275,8 @@ str_insert_str(struct str *dst, size_t pos, struct str *str)
 {
 	if (!dst || !str)
 		return NULL;
+	if (str->len == 0)
+		return dst;
 	if (pos > dst->len)
 		return NULL;
 	if (!str_realloc(dst, dst->len + str->len + 1))
@@ -304,17 +303,18 @@ str_realloc(struct str *s, size_t siz)
 struct str *
 str_remove(struct str *s, size_t pos, size_t len)
 {
+	/* TODO: UTILSH_STR_REMOVE_MIN */
 	if (!s)
 		return NULL;
 	if (pos > s->len)
 		return NULL;
 	s->len -= len;
-	// helloworld
-	// 0123456789
-	//    ^^^
-	// hel   orld
-	// helorld
-	// 0123456
+	/* helloworld
+	   0123456789
+	      ^^^
+	   hel   orld
+	   helorld
+	   0123456 */
 	memmove(&s->s[pos], &s->s[pos + len], s->len - pos);
 	s->s[s->len] = '\0';
 	return s;

@@ -14,7 +14,7 @@ OBJ = $(SRC:.c=.o)
 .PHONY: all clean install uninstall
 all: $(TARGET)
 
-%.o: %.c config.h
+%.o: %.c %.h config.h
 	$(CC) -c $(CFLAGS) $< -o $@
 
 $(TARGET): meo.h $(OBJ) $(wildcard include/*.h)
