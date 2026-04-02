@@ -59,8 +59,8 @@ static int         nwin;
 static int         cmode = 'n';
 static struct tab *ctab;
 
-static struct pollfd gfds[1];
-static char gsbuf[BUFSIZ];
+static struct pollfd fds[1];
+static char sbuf[BUFSIZ];
 static int running = 1;
 
 static const char *entry;
@@ -86,9 +86,16 @@ draw_win(struct win *w)
 		return;
 
 	list_for_each(struct line, l, w->fb->lines.beg, tmp, link) {
+		if (i >= w->h)
+			break;
 		render_line(l);
 		sctui_text(w->x, w->y + i, l->r, w->w);
 		i++;
+	}
+
+	for (; i < w->h; i++) {
+		sctui_fill_space(sbuf, 0, w->w);
+		sctui_text(w->x, w->y + i, sbuf, w->w);
 	}
 
 	w->refresh = 0;
@@ -123,8 +130,8 @@ void
 init(void)
 {
 	sctui_init();
-	gfds[0].fd = STDIN_FILENO;
-	gfds[0].events = POLLIN;
+	fds[0].fd = STDIN_FILENO;
+	fds[0].events = POLLIN;
 
 	nwin++;
 	wins = erealloc(wins, sizeof(*wins) * nwin);
@@ -148,7 +155,7 @@ keypress(void)
 	char *buf;
 	int k;
 
-	if (!(gfds[0].revents & POLLIN))
+	if (!(fds[0].revents & POLLIN))
 		return;
 
 	k = sctui_grab_key();
@@ -163,7 +170,7 @@ keypress(void)
 		return;
 	}
 
-	buf = gsbuf;
+	buf = sbuf;
 	for (int i = 0; i < skb_ncombo; i++) {
 		if (iscntrl(skb_combo[i]))
 			continue;
@@ -173,7 +180,7 @@ keypress(void)
 	*buf = '\0';
 	skb_ncombo = 0;
 
-	insert(&ARG(.s = gsbuf));
+	insert(&ARG(.s = sbuf));
 }
 
 void
@@ -276,10 +283,14 @@ delete(const union arg *arg)
 		if (!prv)
 			return;
 		ctab->w->ccol = prv->s.len;
+
 		list_remove(&ctab->w->fb->lines, &l->link);
 		move_row(&ARG(.i = -1));
+
 		str_free(&l->s);
 		free(l);
+
+		refreshw(ctab->w);
 		return;
 	}
 	estr_remove(&l->s, pos, arg->i);
@@ -379,9 +390,9 @@ cmd_edit(int argc, const char *argv[])
 	if (!(fp = fopen(fb->path, "r")))
 		return;
 
-	for (nline = 0; fgets(gsbuf, BUFSIZ, fp); nline++) {
+	for (nline = 0; fgets(sbuf, BUFSIZ, fp); nline++) {
 		l = ecalloc(1, sizeof(*l));
-		estr_from_cstr(&l->s, gsbuf);
+		estr_from_cstr(&l->s, sbuf);
 		refreshl(l);
 		list_insert(&fb->lines, fb->lines.end, &l->link);
 	}
@@ -424,7 +435,7 @@ main(int argc, char *argv[])
 	init();
 	while (running) {
 		draw();
-		if (poll(gfds, 1, -1) == -1 && errno != EINTR)
+		if (poll(fds, 1, -1) == -1 && errno != EINTR)
 			die("poll()");
 		keypress();
 	}

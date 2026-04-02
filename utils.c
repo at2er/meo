@@ -21,12 +21,13 @@ die(const char *msg, ...)
 {
 	va_list ap;
 
+	if (global_sctui.init)
+		sctui_fini();
+
 	va_start(ap, msg);
 	vfprintf(stderr, msg, ap);
 	va_end(ap);
 
-	if (global_sctui.init)
-		sctui_fini();
 	exit(1);
 }
 

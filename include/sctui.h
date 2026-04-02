@@ -54,12 +54,12 @@ struct sctui {
 extern void sctui_commit(void);
 extern void sctui_fill_space(char *str, int len, int w);
 extern void sctui_fini(void);
-extern void sctui_get_win(void);
 extern int  sctui_grab_key(void);
 extern void sctui_init(void);
 extern void sctui_move(int x, int y);
 extern void sctui_out(const char *str, int len);
 extern void sctui_text(int x, int y, const char *str, int len);
+extern void sctui_update(void);
 
 extern struct sctui global_sctui;
 
@@ -124,18 +124,6 @@ sctui_fini(void)
 	tcsetattr(STDIN_FILENO, TCSAFLUSH, &global_sctui.orig);
 }
 
-void
-sctui_get_win(void)
-{
-	struct winsize ws;
-	if (ioctl(STDOUT_FILENO, TIOCGWINSZ, &ws) == -1 || ws.ws_col == 0) {
-		sctui_fini();
-		_sctui_die("[global_sctui]: failed to get winsize\n");
-	}
-	global_sctui.w = ws.ws_col ? ws.ws_col : 80;
-	global_sctui.h = ws.ws_row ? ws.ws_row : 24;
-}
-
 int
 sctui_grab_key(void)
 {
@@ -159,7 +147,7 @@ sctui_init(void)
 	global_sctui.cur.c_cc[VMIN] = 0;
 	global_sctui.cur.c_cc[VTIME] = 1;
 	tcsetattr(STDIN_FILENO, TCSAFLUSH, &global_sctui.cur);
-	sctui_get_win();
+	sctui_update();
 	global_sctui.cx = global_sctui.cy = 0;
 	global_sctui.bufp = 0;
 	write(STDOUT_FILENO,
@@ -198,6 +186,18 @@ sctui_text(int x, int y, const char *str, int len)
 	sctui_move(x, y);
 	sctui_out(str, len);
 	sctui_move(ox, oy);
+}
+
+void
+sctui_update(void)
+{
+	struct winsize ws;
+	if (ioctl(STDOUT_FILENO, TIOCGWINSZ, &ws) == -1 || ws.ws_col == 0) {
+		sctui_fini();
+		_sctui_die("[global_sctui]: failed to get winsize\n");
+	}
+	global_sctui.w = ws.ws_col ? ws.ws_col : 80;
+	global_sctui.h = ws.ws_row ? ws.ws_row : 24;
 }
 
 #endif /* SCTUI_IMPL */
