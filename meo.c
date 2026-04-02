@@ -13,6 +13,7 @@
 #include <time.h>
 #include <unistd.h>
 
+#include "darr.h"
 #include "getarg.h"
 #include "sctui.h"
 #include "meo.h"
@@ -102,6 +103,8 @@ get_keys_table(void)
 	switch (cmode) {
 	case 'n':
 		return normal_keys;
+	case 'c':
+		return cmd_keys;
 	case 'i':
 		return insert_keys;
 	default:
@@ -176,13 +179,6 @@ new_line(void)
 	struct line *l, *prv = ctab->w->l;
 	struct str s;
 
-	if (!prv) {
-		prv = ecalloc(1, sizeof(*prv));
-		utilsh_list_insert(&ctab->w->fb->lines,
-				ctab->w->fb->lines.end, &prv->link);
-		ctab->w->fb->nline++;
-	}
-
 	*prv->r = 0;
 	l = ecalloc(1, sizeof(*l));
 	refreshl(l);
@@ -238,6 +234,33 @@ scroll(struct win *w)
 
 /* key functions */
 void
+cmd(const union arg *arg)
+{
+	int argc = 0;
+	char **argv = NULL;
+	char *tok, *dup, *saver;
+
+	dup = strdup(arg->s);
+	for (tok = dup; ; tok = NULL) {
+		if (!(tok = strtok_r(tok, " \t", &saver)))
+			break;
+		darr_append(argv, argc, tok);
+	}
+	darr_append(argv, argc, NULL);
+	argc--;
+
+	for (int i = 0; cmds[i].cmd != NULL; i++) {
+		if (strcmp(cmds[i].cmd, argv[0]) == 0 ||
+		    strcmp(cmds[i].alias, argv[0]) == 0) {
+			cmds[i].func(argc, (const char**)argv);
+			break;
+		}
+	}
+
+	free(dup);
+}
+
+void
 delete(const union arg *arg)
 {
 	struct line *l = ctab->w->l;
@@ -259,15 +282,6 @@ insert(const union arg *arg)
 	const char *c;
 	struct line *l = ctab->w->l;
 	struct str s;
-
-	if (!l) {
-		l = ecalloc(1, sizeof(*l));
-		utilsh_list_insert(&ctab->w->fb->lines,
-				ctab->w->fb->lines.end,
-				&l->link);
-		ctab->w->fb->nline++;
-		ctab->w->l = l;
-	}
 
 	refreshl(l);
 	refreshw(ctab->w);
@@ -315,7 +329,7 @@ quit(const union arg *arg)
 }
 
 /* command functions */
-int
+void
 cmd_edit(int argc, const char *argv[])
 {
 	struct fbuf *fb;
@@ -325,8 +339,8 @@ cmd_edit(int argc, const char *argv[])
 
 	if (argc > 1 && argv) {
 		for (int i = 0; i < nfb; i++) {
-			if (strcmp(fbs[nfb].path, argv[1]) == 0) {
-				fb = &fbs[nfb];
+			if (strcmp(fbs[i].path, argv[1]) == 0) {
+				fb = &fbs[i];
 				goto setwin;
 			}
 		}
@@ -351,7 +365,7 @@ cmd_edit(int argc, const char *argv[])
 	strcpy(fb->path, argv[1]);
 
 	if (!(fp = fopen(fb->path, "r")))
-		return 0;
+		return;
 
 	for (nline = 0; fgets(gsbuf, BUFSIZ, fp); nline++) {
 		l = ecalloc(1, sizeof(*l));
@@ -368,16 +382,13 @@ setwin:
 	ctab->w->fb = fb;
 	ctab->w->l = utilsh_list_container_of(fb->lines.beg, struct line, link);
 	refreshw(ctab->w);
-
-	return 0;
 }
 
-// int
-// cmd_quit(int argc, const char *argv[])
-// {
-// 	quit(NULL);
-// 	return 0;
-// }
+void
+cmd_quit(int argc, const char *argv[])
+{
+	quit(NULL);
+}
 
 int
 main(int argc, char *argv[])

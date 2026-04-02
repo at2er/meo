@@ -13,7 +13,7 @@ struct win;
 struct cmd {
 	const char *cmd;   /* full command,  like 'write' */
 	const char *alias; /* command alias, like 'w'     */
-	int (*func)(int argc, const char *argv[]);
+	void (*func)(int argc, const char *argv[]);
 };
 
 struct fbuf {
@@ -44,6 +44,7 @@ struct win {
 };
 
 /* key functions */
+static void cmd(const union arg *arg);
 static void delete(const union arg *arg);
 static void insert(const union arg *arg);
 static void mode(const union arg *arg);
@@ -52,5 +53,5 @@ static void move_row(const union arg *arg);
 static void quit(const union arg *arg);
 
 /* command functions */
-static int cmd_edit(int argc, const char *argv[]);
-// static int cmd_quit(int argc, const char *argv[]);
+static void cmd_edit(int argc, const char *argv[]);
+static void cmd_quit(int argc, const char *argv[]);
