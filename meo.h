@@ -30,7 +30,7 @@ struct line {
 };
 
 struct tab {
-	struct win *w;
+	struct win *w, *pw;
 	struct win **wins;
 	int nwins;
 };
@@ -54,4 +54,5 @@ static void quit(const union arg *arg);
 
 /* command functions */
 static void cmd_edit(int argc, const char *argv[]);
+static void cmd_write(int argc, const char *argv[]);
 static void cmd_quit(int argc, const char *argv[]);

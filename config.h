@@ -24,13 +24,14 @@ static const struct key cmd_keys[] = {
 	{"/b",   delete,      {.i = 1}   },
 	{"/c",   mode,        {.i = 'n'} },
 	{"/e",   mode,        {.i = 'n'} },
-	{"/r",   cmd,         {.s = "e"}},
+	{"/r",   cmd,         {0}        },
 	{NULL,   NULL,        {0}        }
 };
 
 static struct cmd cmds[] = {
-	/* cmd      alias   func     */
-	{"edit",    "e",    cmd_edit  },
-	{"quit",    "q",    cmd_quit  },
-	{NULL,      NULL,   NULL      }
+	/* cmd     alias   func    */
+	{"edit",   "e",    cmd_edit },
+	{"write",  "w",    cmd_write},
+	{"quit",   "q",    cmd_quit },
+	{NULL,     NULL,   NULL     }
 };

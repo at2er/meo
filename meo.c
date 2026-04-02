@@ -55,6 +55,9 @@ static int         nfb;
 static int         ntab;
 static int         nwin;
 
+static struct win *bar;
+static struct fbuf cmdbuf;
+
 /* state */
 static int         cmode = 'n';
 static struct tab *ctab;
@@ -117,8 +120,6 @@ get_keys_table(void)
 		return cmd_keys;
 	case 'i':
 		return insert_keys;
-	default:
-		break;
 	}
 
 	die("get_keys_table()");
@@ -129,19 +130,37 @@ get_keys_table(void)
 void
 init(void)
 {
+	struct line *l;
 	sctui_init();
 	fds[0].fd = STDIN_FILENO;
 	fds[0].events = POLLIN;
 
-	nwin++;
+	nwin = 2;
 	wins = erealloc(wins, sizeof(*wins) * nwin);
 
-	ntab++;
+	ntab = 1;
 	tabs = erealloc(tabs, sizeof(*tabs) * ntab);
 	ctab = tabs;
-	ctab->w = wins;
+	ctab->w = wins + 1;
 	ctab->w->w = global_sctui.w;
-	ctab->w->h = global_sctui.h;
+	ctab->w->h = global_sctui.h - 1;
+
+	l = ecalloc(1, sizeof(*l));
+	estr_from_cstr(&l->s, "\n");
+	refreshl(l);
+
+	bar = wins;
+	bar->x = 0;
+	bar->y = global_sctui.h - 1;
+	bar->w = global_sctui.w;
+	bar->h = 1;
+	bar->crow = bar->ccol = 0;
+	bar->fb = &cmdbuf;
+	bar->fb->nline = 1;
+	bar->l = l;
+	list_init(&bar->fb->lines);
+	list_insert(&bar->fb->lines, bar->fb->lines.end, &l->link);
+	refreshw(bar);
 
 	if (!entry)
 		cmd_edit(0, NULL);
@@ -160,12 +179,12 @@ keypress(void)
 
 	k = sctui_grab_key();
 	if (skb_handle_key(k)) {
-		if (cmode == 'i')
+		if (cmode == 'i' || cmode == 'c')
 			return;
 		skb_ncombo = 0;
 		return;
 	}
-	if (cmode != 'i') {
+	if (!(cmode == 'i' || cmode == 'c')) {
 		skb_ncombo = 0;
 		return;
 	}
@@ -250,9 +269,13 @@ cmd(const union arg *arg)
 	char **argv = NULL;
 	char *tok, *dup, *saver;
 
-	dup = strdup(arg->s);
+	if (arg->s)
+		dup = strdup(arg->s);
+	else
+		dup = strdup(bar->l->s.s);
+
 	for (tok = dup; ; tok = NULL) {
-		if (!(tok = strtok_r(tok, " \t", &saver)))
+		if (!(tok = strtok_r(tok, " \t\n", &saver)))
 			break;
 		darr_append(argv, argc, tok);
 	}
@@ -328,7 +351,21 @@ insert(const union arg *arg)
 void
 mode(const union arg *arg)
 {
+	int orig = cmode;
 	cmode = arg->i;
+	switch (cmode) {
+	case 'c':
+		ctab->pw = ctab->w;
+		ctab->w = bar;
+		refreshw(ctab->w);
+		break;
+	default:
+		if (orig == 'c') {
+			ctab->w = ctab->pw;
+			refreshw(ctab->w);
+		}
+		break;
+	}
 }
 
 void
@@ -405,6 +442,11 @@ setwin:
 	ctab->w->fb = fb;
 	ctab->w->l = list_container_of(fb->lines.beg, struct line, link);
 	refreshw(ctab->w);
+}
+
+void
+cmd_write(int argc, const char *argv[])
+{
 }
 
 void
