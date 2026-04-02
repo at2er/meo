@@ -1,6 +1,3 @@
-#ifndef CONFIG_H
-#define CONFIG_H
-
 static const struct key normal_keys[] = {
 	/* key   func         arg       */
 	{"h",    move_col,    {.i = -1}  },
@@ -37,5 +34,3 @@ static struct cmd cmds[] = {
 	{"quit",    "q",    cmd_quit  },
 	{NULL,      NULL,   NULL      }
 };
-
-#endif

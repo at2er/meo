@@ -65,6 +65,18 @@ void utilsh_list_insert(
 		struct utilsh_list_head *list,
 		struct utilsh_list *prv,
 		struct utilsh_list *elem);
+void utilsh_list_remove(
+		struct utilsh_list_head *list,
+		struct utilsh_list *elem);
+
+#ifdef UTILSH_LIST_STRIP
+#define list_container_of    utilsh_list_container_of
+#define list_for_each        utilsh_list_for_each
+#define list_for_each_unsafe utilsh_list_for_each_unsafe
+#define list_init            utilsh_list_init
+#define list_insert          utilsh_list_insert
+#define list_remove          utilsh_list_remove
+#endif
 
 #endif
 
@@ -97,6 +109,21 @@ utilsh_list_insert(
 	}
 	if (prv == list->end)
 		list->end = elem;
+}
+
+void
+utilsh_list_remove(
+		struct utilsh_list_head *list,
+		struct utilsh_list *elem)
+{
+	if (list->beg == elem)
+		list->beg = elem->nex;
+	if (list->end == elem)
+		list->end = elem->prv;
+	if (elem->prv)
+		elem->prv->nex = elem->nex;
+	if (elem->nex)
+		elem->nex->prv = elem->prv;
 }
 
 #endif /* UTILSH_LIST_IMPL */

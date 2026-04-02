@@ -13,9 +13,12 @@
 #include <time.h>
 #include <unistd.h>
 
+#define UTILSH_LIST_STRIP
 #include "darr.h"
 #include "getarg.h"
+#include "list.h"
 #include "sctui.h"
+
 #include "meo.h"
 #include "utils.h"
 
@@ -82,7 +85,7 @@ draw_win(struct win *w)
 	if (!w->refresh)
 		return;
 
-	utilsh_list_for_each(struct line, l, w->fb->lines.beg, tmp, link) {
+	list_for_each(struct line, l, w->fb->lines.beg, tmp, link) {
 		render_line(l);
 		sctui_text(w->x, w->y + i, l->r, w->w);
 		i++;
@@ -182,7 +185,7 @@ new_line(void)
 	*prv->r = 0;
 	l = ecalloc(1, sizeof(*l));
 	refreshl(l);
-	utilsh_list_insert(&ctab->w->fb->lines, &prv->link, &l->link);
+	list_insert(&ctab->w->fb->lines, &prv->link, &l->link);
 	ctab->w->fb->nline++;
 
 	s.s = prv->s.s + ctab->w->ccol;
@@ -215,7 +218,7 @@ scroll(struct win *w)
 	int i = 0, max;
 
 	w->crow = align(w->crow, 0, w->fb->nline - 1);
-	utilsh_list_for_each(struct line, l,
+	list_for_each(struct line, l,
 			w->fb->lines.beg,
 			tmp, link) {
 		if (i >= w->crow) {
@@ -263,13 +266,22 @@ cmd(const union arg *arg)
 void
 delete(const union arg *arg)
 {
-	struct line *l = ctab->w->l;
+	struct line *l = ctab->w->l, *prv;
 	int pos;
 	if (!l)
 		return;
 	pos = ctab->w->ccol - arg->i;
-	if (pos < 0)
+	if (pos < 0) {
+		prv = list_container_of(l->link.prv, struct line, link);
+		if (!prv)
+			return;
+		ctab->w->ccol = prv->s.len;
+		list_remove(&ctab->w->fb->lines, &l->link);
+		move_row(&ARG(.i = -1));
+		str_free(&l->s);
+		free(l);
 		return;
+	}
 	estr_remove(&l->s, pos, arg->i);
 	refreshl(l);
 	refreshw(ctab->w);
@@ -350,14 +362,14 @@ cmd_edit(int argc, const char *argv[])
 	fbs = erealloc(fbs, sizeof(*fbs) * nfb);
 	fb = &fbs[nfb - 1];
 
-	utilsh_list_init(&fb->lines);
+	list_init(&fb->lines);
 
 	if (argc <= 1 || !argv) {
 		strcpy(fb->path, "<unnamed>");
 		l = ecalloc(1, sizeof(*l));
 		estr_from_cstr(&l->s, "\n");
 		refreshl(l);
-		utilsh_list_insert(&fb->lines, fb->lines.end, &l->link);
+		list_insert(&fb->lines, fb->lines.end, &l->link);
 		fb->nline = 1;
 		goto setwin;
 	}
@@ -371,7 +383,7 @@ cmd_edit(int argc, const char *argv[])
 		l = ecalloc(1, sizeof(*l));
 		estr_from_cstr(&l->s, gsbuf);
 		refreshl(l);
-		utilsh_list_insert(&fb->lines, fb->lines.end, &l->link);
+		list_insert(&fb->lines, fb->lines.end, &l->link);
 	}
 	fb->nline = nline;
 
@@ -380,7 +392,7 @@ cmd_edit(int argc, const char *argv[])
 setwin:
 	ctab->w->crow = ctab->w->ccol = 0;
 	ctab->w->fb = fb;
-	ctab->w->l = utilsh_list_container_of(fb->lines.beg, struct line, link);
+	ctab->w->l = list_container_of(fb->lines.beg, struct line, link);
 	refreshw(ctab->w);
 }
 
