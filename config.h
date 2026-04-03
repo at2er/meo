@@ -7,6 +7,8 @@ static const struct key normal_keys[] = {
 	{"k",    move_row,    {.i = -1}  },
 	{"l",    move_col,    {.i =  1}  },
 	{"i",    mode,        {.i = 'i'} },
+	{"o",    new_line,    {.i = 1}   },
+	{"O",    new_line,    {.i = 0}   },
 	{"q",    quit,        {0}        },
 	{":",    mode,        {.i = 'c'} },
 	{NULL,   NULL,        {0}        }

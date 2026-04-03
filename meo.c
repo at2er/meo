@@ -32,7 +32,6 @@ static void fini(void);
 static const struct key *get_keys_table(void);
 static void init(void);
 static void keypress(void);
-static void new_line(void);
 static void render_line(struct line *l);
 static void scroll(struct win *w);
 
@@ -203,8 +202,6 @@ keypress(void)
 
 	buf = sbuf;
 	for (int i = 0; i < skb_ncombo; i++) {
-		if (iscntrl(skb_combo[i]))
-			continue;
 		*buf = skb_combo[i];
 		buf++;
 	}
@@ -215,26 +212,33 @@ keypress(void)
 }
 
 void
-new_line(void)
+new_line(const union arg *arg)
 {
 	struct line *l, *prv = ctab->w->l;
 	struct str s;
 
-	*prv->r = 0;
 	l = ecalloc(1, sizeof(*l));
-	refreshl(l);
+	if (!(arg->i & 1))
+		prv = list_container_of(prv->link.prv, struct line, link);
 	list_insert(&ctab->w->fb->lines, &prv->link, &l->link);
 	ctab->w->fb->nline++;
 
-	s.s = prv->s.s + ctab->w->col;
-	s.len = prv->s.len - ctab->w->col;
-	s.siz = s.len + 1;
-	if (s.len > 0)
-		estr_append_str(&l->s, &s);
-	estr_remove(&prv->s, ctab->w->col, s.len - 1);
+	if (arg->i & 1 << 1) {
+		s.s = prv->s.s + ctab->w->col;
+		s.len = prv->s.len - ctab->w->col;
+		s.siz = s.len + 1;
+		if (s.len > 0)
+			estr_append_str(&l->s, &s);
+		estr_remove(&prv->s, ctab->w->col, s.len - 1);
+	} else {
+		estr_from_cstr(&l->s, "\n");
+	}
 
-	ctab->w->col = 0;
-	move_row(&ARG(.i = 1));
+	move_row(&ARG(.i = (arg->i & 1)));
+
+	refreshl(prv);
+	refreshl(l);
+	refreshw(ctab->w);
 }
 
 void
@@ -381,9 +385,6 @@ insert(const union arg *arg)
 	struct line *l = ctab->w->l;
 	struct str s;
 
-	refreshl(l);
-	refreshw(ctab->w);
-
 	s.s = (char*)arg->s;
 	s.len = 0;
 	for (c = arg->s; *c; c++) {
@@ -391,12 +392,16 @@ insert(const union arg *arg)
 			estr_insert_str(&l->s, ctab->w->col - 1, &s);
 			s.s = (char*)(c + 1);
 			s.siz = s.len = 0;
-			new_line();
+			new_line(&ARG(.i = 0 | 1 << 1));
 			continue;
 		}
 		s.len++;
 		ctab->w->col++;
 	}
+
+	refreshl(l);
+	refreshw(ctab->w);
+
 	estr_insert_str(&l->s, ctab->w->col - 1, &s);
 }
 
@@ -488,9 +493,8 @@ cmd_edit(int argc, const char *argv[])
 	fb->nline = nline;
 
 	fclose(fp);
-
-setwin:
 	ctab->w->row = ctab->w->col = 0;
+setwin:
 	ctab->w->fb = fb;
 	ctab->w->l = list_container_of(fb->lines.beg, struct line, link);
 	scroll(ctab->w);

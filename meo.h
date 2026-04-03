@@ -50,6 +50,7 @@ static void insert(const union arg *arg);
 static void mode(const union arg *arg);
 static void move_col(const union arg *arg);
 static void move_row(const union arg *arg);
+static void new_line(const union arg *arg);
 static void quit(const union arg *arg);
 
 /* command functions */
