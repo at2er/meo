@@ -281,8 +281,8 @@ scroll(struct win *w)
 	if (w->row <= w->rowoff) {
 		w->rowoff = w->row;
 		refreshw(w);
-	} else if (w->row > w->rowoff + w->h) {
-		w->rowoff = w->row - w->h;
+	} else if (w->row >= w->rowoff + w->h) {
+		w->rowoff = w->row - w->h + 1;
 		refreshw(w);
 	}
 	list_for_each(struct line, l,
