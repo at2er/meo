@@ -1,3 +1,5 @@
+static const char *tab_render = "        ";
+
 static const struct key normal_keys[] = {
 	/* key   func         arg       */
 	{"h",    move_col,    {.i = -1}  },

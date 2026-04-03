@@ -56,6 +56,7 @@ static int         ntab;
 static int         nwin;
 
 static struct win *bar;
+static struct win *cmdback;
 static struct fbuf cmdbuf;
 
 /* state */
@@ -73,10 +74,21 @@ static const char *entry;
 void
 draw(void)
 {
+	int col = 0;
 	for (int i = 0; i < nwin; i++)
 		draw_win(&wins[i]);
-	sctui_move(ctab->w->x + ctab->w->ccol,
-			ctab->w->y + ctab->w->crow);
+	for (int i = 0; i < ctab->w->col; i++) {
+		switch (ctab->w->l->s.s[i]) {
+		case '\t':
+			col += strlen(tab_render);
+			break;
+		default:
+			col++;
+			break;
+		}
+	}
+	sctui_move(ctab->w->x + col,
+			ctab->w->y + ctab->w->row - ctab->w->rowoff);
 	sctui_commit();
 }
 
@@ -88,7 +100,7 @@ draw_win(struct win *w)
 	if (!w->refresh)
 		return;
 
-	list_for_each(struct line, l, w->fb->lines.beg, tmp, link) {
+	list_for_each(struct line, l, &w->draw->link, tmp, link) {
 		if (i >= w->h)
 			break;
 		render_line(l);
@@ -150,14 +162,14 @@ init(void)
 	refreshl(l);
 
 	bar = wins;
+	memset(bar, 0, sizeof(*bar));
 	bar->x = 0;
 	bar->y = global_sctui.h - 1;
 	bar->w = global_sctui.w;
 	bar->h = 1;
-	bar->crow = bar->ccol = 0;
 	bar->fb = &cmdbuf;
 	bar->fb->nline = 1;
-	bar->l = l;
+	bar->l = bar->draw = l;
 	list_init(&bar->fb->lines);
 	list_insert(&bar->fb->lines, bar->fb->lines.end, &l->link);
 	refreshw(bar);
@@ -214,27 +226,45 @@ new_line(void)
 	list_insert(&ctab->w->fb->lines, &prv->link, &l->link);
 	ctab->w->fb->nline++;
 
-	s.s = prv->s.s + ctab->w->ccol;
-	s.len = prv->s.len - ctab->w->ccol;
+	s.s = prv->s.s + ctab->w->col;
+	s.len = prv->s.len - ctab->w->col;
 	s.siz = s.len + 1;
 	if (s.len > 0)
 		estr_append_str(&l->s, &s);
-	estr_remove(&prv->s, ctab->w->ccol, s.len - 1);
+	estr_remove(&prv->s, ctab->w->col, s.len - 1);
 
-	ctab->w->ccol = 0;
+	ctab->w->col = 0;
 	move_row(&ARG(.i = 1));
 }
 
 void
 render_line(struct line *l)
 {
+	int p = 0, t;
+
 	if (*l->r != 0)
 		return;
-	for (size_t i = 0; i < VLINE_RENDER_MAX; i++) {
-		if (i >= l->s.len || l->s.s[i] == '\n')
-			l->r[i] = ' ';
-		else
-			l->r[i] = l->s.s[i];
+
+	for (int i = 0; p < VLINE_RENDER_MAX; i++) {
+		if (i >= (int)l->s.len)
+			goto space;
+		switch (l->s.s[i]) {
+		case '\t':
+			if ((t = strlen(tab_render)) + p >= VLINE_RENDER_MAX)
+				t = VLINE_RENDER_MAX - p;
+			memcpy(l->r + p, tab_render, t);
+			p += t;
+			break;
+		case '\n':
+		space:
+			l->r[p] = ' ';
+			p++;
+			break;
+		default:
+			l->r[p] = l->s.s[i];
+			p++;
+			break;
+		}
 	}
 }
 
@@ -243,11 +273,20 @@ scroll(struct win *w)
 {
 	int i = 0, max;
 
-	w->crow = align(w->crow, 0, w->fb->nline - 1);
+	w->row = align(w->row, 0, w->fb->nline - 1);
+	if (w->row <= w->rowoff) {
+		w->rowoff = w->row;
+		refreshw(w);
+	} else if (w->row > w->rowoff + w->h) {
+		w->rowoff = w->row - w->h;
+		refreshw(w);
+	}
 	list_for_each(struct line, l,
 			w->fb->lines.beg,
 			tmp, link) {
-		if (i >= w->crow) {
+		if (i == w->rowoff)
+			w->draw = l;
+		if (i >= w->row) {
 			w->l = l;
 			break;
 		}
@@ -258,7 +297,7 @@ scroll(struct win *w)
 		max = w->l->s.len - 1;
 	else
 		max = 0;
-	w->ccol = align(w->ccol, 0, max);
+	w->col = align(w->col, 0, max);
 }
 
 /* key functions */
@@ -269,10 +308,17 @@ cmd(const union arg *arg)
 	char **argv = NULL;
 	char *tok, *dup, *saver;
 
-	if (arg->s)
+	if (arg->s) {
 		dup = strdup(arg->s);
-	else
+	} else {
 		dup = strdup(bar->l->s.s);
+		bar->l->s.s[0] = '\n';
+		bar->l->s.s[1] = '\0';
+		bar->l->s.len = 1;
+		scroll(bar);
+		refreshl(bar->l);
+		refreshw(bar);
+	}
 
 	for (tok = dup; ; tok = NULL) {
 		if (!(tok = strtok_r(tok, " \t\n", &saver)))
@@ -281,6 +327,12 @@ cmd(const union arg *arg)
 	}
 	darr_append(argv, argc, NULL);
 	argc--;
+
+	cmode = 'n';
+	ctab->w = cmdback;
+
+	if (!argc || !argv[0])
+		return;
 
 	for (int i = 0; cmds[i].cmd != NULL; i++) {
 		if (strcmp(cmds[i].cmd, argv[0]) == 0 ||
@@ -300,12 +352,12 @@ delete(const union arg *arg)
 	int pos;
 	if (!l)
 		return;
-	pos = ctab->w->ccol - arg->i;
+	pos = ctab->w->col - arg->i;
 	if (pos < 0) {
 		prv = list_container_of(l->link.prv, struct line, link);
 		if (!prv)
 			return;
-		ctab->w->ccol = prv->s.len;
+		ctab->w->col = prv->s.len;
 
 		list_remove(&ctab->w->fb->lines, &l->link);
 		move_row(&ARG(.i = -1));
@@ -336,16 +388,16 @@ insert(const union arg *arg)
 	s.len = 0;
 	for (c = arg->s; *c; c++) {
 		if (*c == '\n') {
-			estr_insert_str(&l->s, ctab->w->ccol - 1, &s);
+			estr_insert_str(&l->s, ctab->w->col - 1, &s);
 			s.s = (char*)(c + 1);
 			s.siz = s.len = 0;
 			new_line();
 			continue;
 		}
 		s.len++;
-		ctab->w->ccol++;
+		ctab->w->col++;
 	}
-	estr_insert_str(&l->s, ctab->w->ccol - 1, &s);
+	estr_insert_str(&l->s, ctab->w->col - 1, &s);
 }
 
 void
@@ -355,13 +407,13 @@ mode(const union arg *arg)
 	cmode = arg->i;
 	switch (cmode) {
 	case 'c':
-		ctab->pw = ctab->w;
+		cmdback = ctab->w;
 		ctab->w = bar;
 		refreshw(ctab->w);
 		break;
 	default:
 		if (orig == 'c') {
-			ctab->w = ctab->pw;
+			ctab->w = cmdback;
 			refreshw(ctab->w);
 		}
 		break;
@@ -371,14 +423,14 @@ mode(const union arg *arg)
 void
 move_col(const union arg *arg)
 {
-	ctab->w->ccol += arg->i;
+	ctab->w->col += arg->i;
 	scroll(ctab->w);
 }
 
 void
 move_row(const union arg *arg)
 {
-	ctab->w->crow += arg->i;
+	ctab->w->row += arg->i;
 	scroll(ctab->w);
 }
 
@@ -438,15 +490,29 @@ cmd_edit(int argc, const char *argv[])
 	fclose(fp);
 
 setwin:
-	ctab->w->crow = ctab->w->ccol = 0;
+	ctab->w->row = ctab->w->col = 0;
 	ctab->w->fb = fb;
 	ctab->w->l = list_container_of(fb->lines.beg, struct line, link);
+	scroll(ctab->w);
 	refreshw(ctab->w);
 }
 
 void
 cmd_write(int argc, const char *argv[])
 {
+	FILE *fp;
+
+	if (argc <= 1 || !argv[1]) {
+		if (!(fp = fopen(ctab->w->fb->path, "w")))
+			return;
+	} else {
+		fp = fopen(argv[1], "w");
+	}
+
+	list_for_each(struct line, l, ctab->w->fb->lines.beg, tmp, link)
+		fputs(l->s.s, fp);
+
+	fclose(fp);
 }
 
 void

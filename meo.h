@@ -30,13 +30,13 @@ struct line {
 };
 
 struct tab {
-	struct win *w, *pw;
+	struct win *w;
 	struct win **wins;
 	int nwins;
 };
 
 struct win {
-	int crow, ccol;
+	int row, rowoff, col;
 	struct fbuf *fb;
 	struct line *l, *draw;
 	int refresh;
