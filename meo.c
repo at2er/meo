@@ -202,23 +202,18 @@ void
 keypress(void)
 {
 	char *buf;
-	int k;
+	int h, k;
 
 	if (!(fds[0].revents & POLLIN))
 		return;
 
 	k = sctui_grab_key();
-	if (skb_handle_key(k)) {
-		if (!(cmode == MODE_INS || cmode == MODE_CMD))
-			skb_ncombo = 0;
-		ruler();
-		return;
-	}
-	if (!(cmode == MODE_INS || cmode == MODE_CMD)) {
-		ruler();
+	h = skb_handle_key(k);
+	ruler();
+	if (!h && !(cmode == MODE_INS || cmode == MODE_CMD))
 		skb_ncombo = 0;
+	if (h)
 		return;
-	}
 
 	buf = sbuf;
 	for (int i = 0; i < skb_ncombo; i++) {
@@ -437,6 +432,20 @@ delete(const union arg *arg)
 	refreshl(l);
 	refreshw(ctab->w);
 	move_col(&ARG(.i = -arg->i));
+}
+
+void
+goto_beg(const union arg *arg)
+{
+	ctab->w->row = 0;
+	scroll(ctab->w);
+}
+
+void
+goto_end(const union arg *arg)
+{
+	ctab->w->row = ctab->w->fb->nline - 1;
+	scroll(ctab->w);
 }
 
 void

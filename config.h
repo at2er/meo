@@ -2,6 +2,9 @@ static const char *tab_render = "        ";
 
 static const struct key normal_keys[] = {
 	/* key   func         arg           */
+	{"gg",   goto_beg,    {0}            },
+	{"gG",   goto_end,    {0}            },
+	{"G",    goto_end,    {0}            },
 	{"h",    move_col,    {.i = -1}      },
 	{"j",    move_row,    {.i =  1}      },
 	{"k",    move_row,    {.i = -1}      },
