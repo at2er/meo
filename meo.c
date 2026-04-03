@@ -28,11 +28,14 @@
 
 static void draw(void);
 static void draw_win(struct win *w);
+static struct line *empty_line(void);
 static void fini(void);
 static const struct key *get_keys_table(void);
 static void init(void);
 static void keypress(void);
+static void move(struct win *w);
 static void render_line(struct line *l);
+static void ruler(void);
 static void scroll(struct win *w);
 
 static const char *usages[] = {
@@ -54,12 +57,13 @@ static int         nfb;
 static int         ntab;
 static int         nwin;
 
-static struct win *bar;
+static struct win bar;
 static struct win *cmdback;
 static struct fbuf cmdbuf;
+static struct fbuf rulerbuf;
 
 /* state */
-static int         cmode = 'n';
+static int         cmode = MODE_NOR;
 static struct tab *ctab;
 
 static struct pollfd fds[1];
@@ -76,6 +80,7 @@ draw(void)
 	int col = 0;
 	for (int i = 0; i < nwin; i++)
 		draw_win(&wins[i]);
+	draw_win(&bar);
 	for (int i = 0; i < ctab->w->col; i++) {
 		switch (ctab->w->l->s.s[i]) {
 		case '\t':
@@ -115,6 +120,15 @@ draw_win(struct win *w)
 	w->refresh = 0;
 }
 
+struct line *
+empty_line(void)
+{
+	struct line *l = ecalloc(1, sizeof(*l));
+	estr_from_cstr(&l->s, "\n");
+	refreshl(l);
+	return l;
+}
+
 void
 fini(void)
 {
@@ -125,11 +139,11 @@ const struct key *
 get_keys_table(void)
 {
 	switch (cmode) {
-	case 'n':
+	case MODE_NOR:
 		return normal_keys;
-	case 'c':
+	case MODE_CMD:
 		return cmd_keys;
-	case 'i':
+	case MODE_INS:
 		return insert_keys;
 	}
 
@@ -146,32 +160,37 @@ init(void)
 	fds[0].fd = STDIN_FILENO;
 	fds[0].events = POLLIN;
 
-	nwin = 2;
+	nwin = 1;
 	wins = erealloc(wins, sizeof(*wins) * nwin);
 
 	ntab = 1;
 	tabs = erealloc(tabs, sizeof(*tabs) * ntab);
 	ctab = tabs;
-	ctab->w = wins + 1;
+	ctab->w = wins;
 	ctab->w->w = global_sctui.w;
 	ctab->w->h = global_sctui.h - 1;
 
-	l = ecalloc(1, sizeof(*l));
-	estr_from_cstr(&l->s, "\n");
-	refreshl(l);
+	l = empty_line();
+	list_init(&rulerbuf.lines);
+	list_insert(&rulerbuf.lines, rulerbuf.lines.end, &l->link);
 
-	bar = wins;
-	memset(bar, 0, sizeof(*bar));
-	bar->x = 0;
-	bar->y = global_sctui.h - 1;
-	bar->w = global_sctui.w;
-	bar->h = 1;
-	bar->fb = &cmdbuf;
-	bar->fb->nline = 1;
-	bar->l = bar->draw = l;
-	list_init(&bar->fb->lines);
-	list_insert(&bar->fb->lines, bar->fb->lines.end, &l->link);
-	refreshw(bar);
+	l = empty_line();
+	list_init(&cmdbuf.lines);
+	list_insert(&cmdbuf.lines, cmdbuf.lines.end, &l->link);
+
+	memset(&bar, 0, sizeof(bar));
+	bar.x = 0;
+	bar.y = global_sctui.h - 1;
+	bar.w = global_sctui.w;
+	bar.h = 1;
+	bar.fb = &rulerbuf;
+	bar.fb->nline = 1;
+	bar.l = bar.draw = list_container_of(
+			bar.fb->lines.beg,
+			struct line, link);
+	refreshw(&bar);
+
+	ruler();
 
 	if (!entry)
 		cmd_edit(0, NULL);
@@ -190,12 +209,13 @@ keypress(void)
 
 	k = sctui_grab_key();
 	if (skb_handle_key(k)) {
-		if (cmode == 'i' || cmode == 'c')
-			return;
-		skb_ncombo = 0;
+		if (!(cmode == MODE_INS || cmode == MODE_CMD))
+			skb_ncombo = 0;
+		ruler();
 		return;
 	}
-	if (!(cmode == 'i' || cmode == 'c')) {
+	if (!(cmode == MODE_INS || cmode == MODE_CMD)) {
+		ruler();
 		skb_ncombo = 0;
 		return;
 	}
@@ -209,6 +229,16 @@ keypress(void)
 	skb_ncombo = 0;
 
 	insert(&ARG(.s = sbuf));
+}
+
+void
+move(struct win *w)
+{
+	w->fb->row = w->row;
+	w->fb->rowoff = w->rowoff;
+	w->fb->col = w->col;
+
+	ruler();
 }
 
 void
@@ -273,6 +303,35 @@ render_line(struct line *l)
 }
 
 void
+ruler(void)
+{
+	struct line *l;
+	int len, padding;
+
+	l = list_container_of(rulerbuf.lines.beg,
+			struct line, link);
+
+	estr_clean(&l->s);
+	if (ctab->w == &bar)
+		return;
+
+	len = snprintf(sbuf, BUFSIZ, "%d,%d", ctab->w->row, ctab->w->col);
+
+	padding = global_sctui.w - len - skb_ncombo - 4;
+	for (int i = 0; i < padding; i++)
+		estr_append_chr(&l->s, ' ');
+
+	for (int i = 0; i < skb_ncombo; i++)
+		estr_append_chr(&l->s, skb_combo[i]);
+	estr_append_cstr(&l->s, "    ");
+
+	estr_append_cstr(&l->s, sbuf);
+
+	refreshl(l);
+	refreshw(&bar);
+}
+
+void
 scroll(struct win *w)
 {
 	int i = 0, max;
@@ -303,9 +362,7 @@ scroll(struct win *w)
 		max = 0;
 	w->col = align(w->col, 0, max);
 
-	w->fb->row = w->row;
-	w->fb->rowoff = w->rowoff;
-	w->fb->col = w->col;
+	move(w);
 }
 
 /* key functions */
@@ -319,13 +376,13 @@ cmd(const union arg *arg)
 	if (arg->s) {
 		dup = strdup(arg->s);
 	} else {
-		dup = strdup(bar->l->s.s);
-		bar->l->s.s[0] = '\n';
-		bar->l->s.s[1] = '\0';
-		bar->l->s.len = 1;
-		scroll(bar);
-		refreshl(bar->l);
-		refreshw(bar);
+		dup = strdup(bar.l->s.s);
+		bar.l->s.s[0] = '\n';
+		bar.l->s.s[1] = '\0';
+		bar.l->s.len = 1;
+		scroll(&bar);
+		refreshl(bar.l);
+		refreshw(&bar);
 	}
 
 	for (tok = dup; ; tok = NULL) {
@@ -336,7 +393,7 @@ cmd(const union arg *arg)
 	darr_append(argv, argc, NULL);
 	argc--;
 
-	cmode = 'n';
+	cmode = MODE_NOR;
 	ctab->w = cmdback;
 
 	if (!argc || !argv[0])
@@ -407,6 +464,8 @@ insert(const union arg *arg)
 	refreshw(ctab->w);
 
 	estr_insert_str(&l->s, ctab->w->col - 1, &s);
+
+	move(ctab->w);
 }
 
 void
@@ -415,15 +474,19 @@ mode(const union arg *arg)
 	int orig = cmode;
 	cmode = arg->i;
 	switch (cmode) {
-	case 'c':
+	case MODE_CMD:
+		bar.fb = &cmdbuf;
 		cmdback = ctab->w;
-		ctab->w = bar;
+		ctab->w = &bar;
 		refreshw(ctab->w);
+		scroll(&bar);
 		break;
 	default:
-		if (orig == 'c') {
+		if (orig == MODE_CMD) {
+			bar.fb = &rulerbuf;
 			ctab->w = cmdback;
 			refreshw(ctab->w);
+			scroll(&bar);
 		}
 		break;
 	}
@@ -476,9 +539,7 @@ cmd_edit(int argc, const char *argv[])
 
 	if (argc <= 1 || !argv) {
 		strcpy(fb->path, "<unnamed>");
-		l = ecalloc(1, sizeof(*l));
-		estr_from_cstr(&l->s, "\n");
-		refreshl(l);
+		l = empty_line();
 		list_insert(&fb->lines, fb->lines.end, &l->link);
 		fb->nline = 1;
 		goto setwin;

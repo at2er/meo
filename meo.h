@@ -3,6 +3,8 @@
 
 #define VLINE_RENDER_MAX 2048
 
+enum { MODE_NOR, MODE_INS, MODE_CMD };
+
 struct fbuf;
 struct win;
 
