@@ -302,6 +302,10 @@ scroll(struct win *w)
 	else
 		max = 0;
 	w->col = align(w->col, 0, max);
+
+	w->fb->row = w->row;
+	w->fb->rowoff = w->rowoff;
+	w->fb->col = w->col;
 }
 
 /* key functions */
@@ -466,6 +470,7 @@ cmd_edit(int argc, const char *argv[])
 	nfb++;
 	fbs = erealloc(fbs, sizeof(*fbs) * nfb);
 	fb = &fbs[nfb - 1];
+	memset(fb, 0, sizeof(*fb));
 
 	list_init(&fb->lines);
 
@@ -493,8 +498,10 @@ cmd_edit(int argc, const char *argv[])
 	fb->nline = nline;
 
 	fclose(fp);
-	ctab->w->row = ctab->w->col = 0;
 setwin:
+	ctab->w->row = fb->row;
+	ctab->w->rowoff = fb->rowoff;
+	ctab->w->col = fb->col;
 	ctab->w->fb = fb;
 	ctab->w->l = list_container_of(fb->lines.beg, struct line, link);
 	scroll(ctab->w);

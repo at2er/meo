@@ -11,6 +11,8 @@ static const struct key normal_keys[] = {
 	{"O",    new_line,    {.i = 0}   },
 	{"q",    quit,        {0}        },
 	{":",    mode,        {.i = 'c'} },
+	{"^d",   move_row,    {.i =  10} },
+	{"^u",   move_row,    {.i = -10} },
 	{NULL,   NULL,        {0}        }
 };
 

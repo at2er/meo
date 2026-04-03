@@ -20,6 +20,8 @@ struct fbuf {
 	struct utilsh_list_head lines;
 	int nline;
 	char path[FILENAME_MAX];
+
+	int row, rowoff, col;
 };
 
 struct line {
@@ -36,10 +38,10 @@ struct tab {
 };
 
 struct win {
-	int row, rowoff, col;
 	struct fbuf *fb;
 	struct line *l, *draw;
 	int refresh;
+	int row, rowoff, col;
 	int x, y, w, h;
 };
 
