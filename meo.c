@@ -313,6 +313,11 @@ ruler(void)
 	len = snprintf(sbuf, BUFSIZ, "%d,%d", ctab->w->row, ctab->w->col);
 
 	padding = global_sctui.w - len - skb_ncombo - 4;
+	if (mode_str[cmode]) {
+		padding -= strlen(mode_str[cmode]);
+		estr_append_cstr(&l->s, mode_str[cmode]);
+	}
+
 	for (int i = 0; i < padding; i++)
 		estr_append_chr(&l->s, ' ');
 

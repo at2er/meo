@@ -1,5 +1,11 @@
 static const char *tab_render = "        ";
 
+static const char *mode_str[] = {
+	[MODE_NOR] = NULL,
+	[MODE_INS] = "-- INS --",
+	[MODE_CMD] = NULL,
+};
+
 static const struct key normal_keys[] = {
 	/* key   func         arg           */
 	{"gg",   goto_beg,    {0}            },
