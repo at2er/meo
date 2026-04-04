@@ -3,7 +3,9 @@
 
 #define VLINE_RENDER_MAX 2048
 
-enum { MODE_NOR, MODE_INS, MODE_CMD };
+enum { MODE_NOR, MODE_INS, MODE_CMD, MODE_SEARCH };
+enum { GOTO_IN_FILE, GOTO_IN_LINE };
+enum { UP, DOWN };
 
 struct fbuf;
 struct win;
@@ -66,6 +68,7 @@ static void move_col(const union arg *arg);
 static void move_row(const union arg *arg);
 static void new_line(const union arg *arg);
 static void quit(const union arg *arg);
+static void search(const union arg *arg);
 static void sel_word(const union arg *arg);
 
 /* command functions */

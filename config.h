@@ -6,49 +6,57 @@ static const char *mode_str[] = {
 	[MODE_NOR]    = NULL,
 	[MODE_INS]    = "-- INS --",
 	[MODE_CMD]    = NULL,
+	[MODE_SEARCH] = NULL,
 	NULL
 };
 
 static const struct key normal_keys[] = {
-	/* key   func         arg           */
-	{"c",    change,      {0}            },
-	{"d",    delete,      {0}            },
-	{"gg",   goto_beg,    {0}            },
-	{"gG",   goto_end,    {0}            },
-	{"G",    goto_end,    {0}            },
-	{"h",    move_col,    {.i = -1}      },
-	{"j",    move_row,    {.i =  1}      },
-	{"k",    move_row,    {.i = -1}      },
-	{"l",    move_col,    {.i =  1}      },
-	{"i",    mode,        {.i = MODE_INS}},
-	{"m",    mark,        {0}            },
-	{"o",    new_line,    {.i = 1}       },
-	{"O",    new_line,    {.i = 0}       },
-	{"q",    quit,        {0}            },
-	{"w",    sel_word,    {0}            },
-	{"'",    goto_mark,   {0}            },
-	{":",    mode,        {.i = MODE_CMD}},
-	{"^d",   move_row,    {.i =  10}     },
-	{"^u",   move_row,    {.i = -10}     },
-	{NULL,   NULL,        {0}            }
+	/* key   func         arg               */
+	{"c",    change,      {0}                },
+	{"d",    delete,      {0}                },
+	{"gg",   goto_beg,    {.i = GOTO_IN_FILE}},
+	{"gG",   goto_end,    {.i = GOTO_IN_FILE}},
+	{"gh",   goto_beg,    {.i = GOTO_IN_LINE}},
+	{"gl",   goto_end,    {.i = GOTO_IN_LINE}},
+	{"G",    goto_end,    {.i = GOTO_IN_FILE}},
+	{"h",    move_col,    {.i = -1}          },
+	{"j",    move_row,    {.i =  1}          },
+	{"k",    move_row,    {.i = -1}          },
+	{"l",    move_col,    {.i =  1}          },
+	{"i",    mode,        {.i = MODE_INS}    },
+	{"m",    mark,        {0}                },
+	{"n",    search,      {.i =  1}          },
+	{"N",    search,      {.i = -1}          },
+	{"o",    new_line,    {.i = DOWN}        },
+	{"O",    new_line,    {.i = UP}          },
+	{"q",    quit,        {0}                },
+	{"w",    sel_word,    {0}                },
+	{"'",    goto_mark,   {0}                },
+	{"/",    mode,        {.i = MODE_SEARCH} },
+	{":",    mode,        {.i = MODE_CMD}    },
+	{"^d",   move_row,    {.i =  10}         },
+	{"^u",   move_row,    {.i = -10}         },
+	{NULL,   NULL,        {0}                }
 };
 
 static const struct key insert_keys[] = {
-	/* key   func         arg           */
-	{"jk",   mode,        {.i = MODE_NOR}},
-	{"/b",   delete,      {.i = 1}       },
-	{"/e",   mode,        {.i = MODE_NOR}},
-	{"/r",   insert,      {.s = "\n"}    },
-	{NULL,   NULL,        {0}            }
+	/* key   func         arg               */
+	{"jk",   mode,        {.i = MODE_NOR}    },
+	{"/b",   delete,      {.i = 1}           },
+	{"/e",   mode,        {.i = MODE_NOR}    },
+	{"/r",   insert,      {.s = "\n"}        },
+	{"^h",   delete,      {.i = 1}           },
+	{NULL,   NULL,        {0}                }
 };
 
+/* search mode also use this bindings */
 static const struct key cmd_keys[] = {
-	/* key   func         arg           */
-	{"/b",   delete,      {.i = 1}       },
-	{"/c",   mode,        {.i = MODE_NOR}},
-	{"/e",   mode,        {.i = MODE_NOR}},
-	{"/r",   cmd,         {0}            },
-	{NULL,   NULL,        {0}            }
+	/* key   func         arg               */
+	{"/b",   delete,      {.i = 1}           },
+	{"/c",   mode,        {.i = MODE_NOR}    },
+	{"/e",   mode,        {.i = MODE_NOR}    },
+	{"/r",   cmd,         {0}                },
+	{NULL,   NULL,        {0}                }
 };
 
 static struct cmd cmds[] = {
