@@ -31,9 +31,11 @@ static void draw_sel_line(void);
 static void draw_win(struct win *w);
 static struct line *empty_line(void);
 static void fini(void);
+static int get_cursor_y(void);
 static const struct key *get_keys_table(void);
-static void get_rowcol(struct marker *m);
 static struct marker *get_marker(int k);
+static void get_rowcol(struct marker *m);
+static void get_sel_area(int *beg, int *end);
 static void init(void);
 static void keypress(int k);
 static void move(struct win *w);
@@ -105,8 +107,7 @@ draw(void)
 
 	if (sel_line)
 		draw_sel_line();
-	sctui_move(ctab->w->x + col,
-			ctab->w->y + ctab->w->row - ctab->w->rowoff);
+	sctui_move(ctab->w->x + col, get_cursor_y());
 
 	sctui_commit();
 }
@@ -118,21 +119,13 @@ draw_sel_line(void)
 	int beg, to;
 	char buf[256], *p;
 
-	beg = markers[SEL_MARKER].col;
-	to = ctab->w->col;
-
-	if (beg > to) {
-		beg ^= to;
-		to ^= beg;
-		beg ^= to;
-	}
+	get_sel_area(&beg, &to);
 
 	p = buf;
 	p += sprintf(p, tmp);
 	p += sprintf(p, "%.*s", to - beg, sel_line->r + beg);
 
-	sctui_text(ctab->w->x + beg, ctab->w->y + ctab->w->row - ctab->w->rowoff,
-			buf, p - buf);
+	sctui_text(ctab->w->x + beg, get_cursor_y(), buf, p - buf);
 	tmp = sctui_attr_off();
 	sctui_out(tmp, strlen(tmp));
 }
@@ -176,6 +169,12 @@ fini(void)
 	sctui_fini();
 }
 
+int
+get_cursor_y(void)
+{
+	return ctab->w->y + ctab->w->row - ctab->w->rowoff;
+}
+
 const struct key *
 get_keys_table(void)
 {
@@ -193,15 +192,6 @@ get_keys_table(void)
 	return NULL;
 }
 
-void
-get_rowcol(struct marker *m)
-{
-	m->fb = ctab->w->fb;
-	m->row = ctab->w->row;
-	m->rowoff = ctab->w->rowoff;
-	m->col = ctab->w->col;
-}
-
 struct marker *
 get_marker(int k)
 {
@@ -217,6 +207,28 @@ get_marker(int k)
 		return NULL;
 	}
 	return &markers[k];
+}
+
+void
+get_rowcol(struct marker *m)
+{
+	m->fb = ctab->w->fb;
+	m->row = ctab->w->row;
+	m->rowoff = ctab->w->rowoff;
+	m->col = ctab->w->col;
+}
+
+void
+get_sel_area(int *beg, int *end)
+{
+	int b = markers[SEL_MARKER].col, e = ctab->w->col;
+	if (b > e) {
+		b ^= e;
+		e ^= b;
+		b ^= e;
+	}
+	*beg = b;
+	*end = e;
 }
 
 void
@@ -297,6 +309,8 @@ move(struct win *w)
 	struct marker m = {w->row, w->rowoff, w->col, w->fb};
 	set_rowcol(&m);
 	ruler();
+	refreshw(w);
+	sel_line = NULL;
 }
 
 void
@@ -418,10 +432,8 @@ scroll(struct win *w)
 	w->row = align(w->row, 0, w->fb->nline - 1);
 	if (w->row <= w->rowoff) {
 		w->rowoff = w->row;
-		refreshw(w);
 	} else if (w->row >= w->rowoff + w->h) {
 		w->rowoff = w->row - w->h + 1;
-		refreshw(w);
 	}
 	list_for_each(struct line, l,
 			w->fb->lines.beg,
@@ -507,10 +519,15 @@ void
 delete(const union arg *arg)
 {
 	struct line *l = ctab->w->l, *prv;
-	int pos;
+	int pos, len, t;
 	if (!l)
 		return;
-	pos = ctab->w->col - arg->i;
+	if (arg->i == 0) {
+		get_sel_area(&pos, &t);
+		len = t - pos;
+	} else {
+		pos = ctab->w->col - arg->i;
+	}
 	if (pos < 0) {
 		prv = list_container_of(l->link.prv, struct line, link);
 		if (!prv)
@@ -526,10 +543,10 @@ delete(const union arg *arg)
 		refreshw(ctab->w);
 		return;
 	}
-	estr_remove(&l->s, pos, arg->i);
+	estr_remove(&l->s, pos, len);
 	refreshl(l);
 	refreshw(ctab->w);
-	move_col(&ARG(.i = -arg->i));
+	move_col(&ARG(.i = -len));
 }
 
 void
@@ -645,7 +662,6 @@ move_col(const union arg *arg)
 {
 	ctab->w->col += arg->i;
 	scroll(ctab->w);
-	sel_line = NULL;
 }
 
 void
@@ -653,7 +669,6 @@ move_row(const union arg *arg)
 {
 	ctab->w->row += arg->i;
 	scroll(ctab->w);
-	sel_line = NULL;
 }
 
 void
