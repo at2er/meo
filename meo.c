@@ -31,6 +31,7 @@ static void draw_win(struct win *w);
 static struct line *empty_line(void);
 static void fini(void);
 static const struct key *get_keys_table(void);
+static void get_rowcol(struct marker *m);
 static struct marker *get_marker(int k);
 static void init(void);
 static void keypress(int k);
@@ -39,6 +40,7 @@ static void render_line(struct line *l);
 static int request_key(void);
 static void ruler(void);
 static void scroll(struct win *w);
+static void set_rowcol(struct marker *m);
 
 static const char *usages[] = {
 "Usage: meo [OPTIONS] [FILE]",
@@ -67,6 +69,7 @@ static struct fbuf rulerbuf;
 /* state */
 static int         cmode = MODE_NOR;
 static struct tab *ctab;
+static int has_implicit_sel;
 /* numbers + lowers + suppers + '\'' */
 static struct marker markers[10 + 52 + 1];
 
@@ -158,6 +161,15 @@ get_keys_table(void)
 	die("get_keys_table()");
 
 	return NULL;
+}
+
+void
+get_rowcol(struct marker *m)
+{
+	m->fb = ctab->w->fb;
+	m->row = ctab->w->row;
+	m->rowoff = ctab->w->rowoff;
+	m->col = ctab->w->col;
 }
 
 struct marker *
@@ -252,10 +264,8 @@ keypress(int k)
 void
 move(struct win *w)
 {
-	w->fb->row = w->row;
-	w->fb->rowoff = w->rowoff;
-	w->fb->col = w->col;
-
+	struct marker m = {w->row, w->rowoff, w->col, w->fb};
+	set_rowcol(&m);
 	ruler();
 }
 
@@ -401,6 +411,20 @@ scroll(struct win *w)
 	move(w);
 }
 
+void
+set_rowcol(struct marker *m)
+{
+	ctab->w->fb = m->fb;
+
+	ctab->w->fb->row = m->row;
+	ctab->w->fb->rowoff = m->rowoff;
+	ctab->w->fb->col = m->col;
+
+	ctab->w->row = m->row;
+	ctab->w->rowoff = m->rowoff;
+	ctab->w->col = m->col;
+}
+
 /* key functions */
 void
 cmd(const union arg *arg)
@@ -492,16 +516,21 @@ goto_end(const union arg *arg)
 void
 goto_mark(const union arg *arg)
 {
-	int k = request_key();
-	struct marker *m = get_marker(k);
+	int k;
+	struct marker *m;
+
+	if (arg->i == 0)
+		k = request_key();
+	else
+		k = arg->i;
+
+	m = get_marker(k);
 	if (!m)
 		return;
 	if (!m->fb)
 		return;
-	ctab->w->fb = m->fb;
-	ctab->w->row = m->row;
-	ctab->w->rowoff = m->rowoff;
-	ctab->w->col = m->col;
+
+	set_rowcol(m);
 	refreshw(ctab->w);
 	scroll(ctab->w);
 }
@@ -538,14 +567,20 @@ insert(const union arg *arg)
 void
 mark(const union arg *arg)
 {
-	int k = request_key();
-	struct marker *m = get_marker(k);
+	int k;
+	struct marker *m;
+
+	if (arg->i == 0)
+		k = request_key();
+	else
+		k = arg->i;
+
+	m = get_marker(k);
 	if (!m)
 		return;
+
 	m->fb = ctab->w->fb;
-	m->row = ctab->w->row;
-	m->rowoff = ctab->w->rowoff;
-	m->col = ctab->w->col;
+	get_rowcol(m);
 }
 
 void
@@ -590,6 +625,32 @@ void
 quit(const union arg *arg)
 {
 	running = 0;
+}
+
+void
+sel_word(const union arg *arg)
+{
+	const char *beg, *end;
+	struct marker fake;
+
+	beg = end = ctab->w->l->s.s + ctab->w->col;
+
+	while (isalpha(*end))
+		end++;
+	while (beg != ctab->w->l->s.s && isalpha(*beg))
+		beg--;
+	beg++;
+
+	get_rowcol(&fake);
+
+	fake.col = beg - ctab->w->l->s.s;
+	set_rowcol(&fake);
+	mark(&ARG(.i = '\''));
+
+	fake.col = end - ctab->w->l->s.s;
+	set_rowcol(&fake);
+
+	has_implicit_sel = 1;
 }
 
 /* command functions */
@@ -640,10 +701,7 @@ cmd_edit(int argc, const char *argv[])
 
 	fclose(fp);
 setwin:
-	ctab->w->row = fb->row;
-	ctab->w->rowoff = fb->rowoff;
-	ctab->w->col = fb->col;
-	ctab->w->fb = fb;
+	set_rowcol(&(struct marker){fb->row, fb->rowoff, fb->col, fb});
 	ctab->w->l = list_container_of(fb->lines.beg, struct line, link);
 	refreshw(ctab->w);
 	scroll(ctab->w);

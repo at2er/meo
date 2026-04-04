@@ -65,6 +65,7 @@ static void move_col(const union arg *arg);
 static void move_row(const union arg *arg);
 static void new_line(const union arg *arg);
 static void quit(const union arg *arg);
+static void sel_word(const union arg *arg);
 
 /* command functions */
 static void cmd_edit(int argc, const char *argv[]);
