@@ -11,6 +11,7 @@ static const char *mode_str[] = {
 
 static const struct key normal_keys[] = {
 	/* key   func         arg           */
+	{"c",    change,      {0}            },
 	{"d",    delete,      {0}            },
 	{"gg",   goto_beg,    {0}            },
 	{"gG",   goto_end,    {0}            },

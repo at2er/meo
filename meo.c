@@ -222,6 +222,10 @@ void
 get_sel_area(int *beg, int *end)
 {
 	int b = markers[SEL_MARKER].col, e = ctab->w->col;
+	if (!sel_line) {
+		*beg = *end = 0;
+		return;
+	}
 	if (b > e) {
 		b ^= e;
 		e ^= b;
@@ -472,6 +476,13 @@ set_rowcol(struct marker *m)
 
 /* key functions */
 void
+change(const union arg *arg)
+{
+	delete(arg);
+	mode(&ARG(.i = MODE_INS));
+}
+
+void
 cmd(const union arg *arg)
 {
 	int argc = 0;
@@ -523,10 +534,13 @@ delete(const union arg *arg)
 	if (!l)
 		return;
 	if (arg->i == 0) {
+		if (!sel_line)
+			return;
 		get_sel_area(&pos, &t);
 		len = t - pos;
 	} else {
 		pos = ctab->w->col - arg->i;
+		len = arg->i;
 	}
 	if (pos < 0) {
 		prv = list_container_of(l->link.prv, struct line, link);
