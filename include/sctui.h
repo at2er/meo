@@ -39,7 +39,28 @@
 #include <termios.h>
 
 #define TK_CTRL(K) ((K) & 0x1f)
-#define SCTUI_OUT_BUF_SIZ 8196
+#define SCTUI_OUT_BUF_SIZ 8192
+
+/*  1 1  22  4  4
+ * |x|x|0..|xx|xx|
+ *  | |  |  |
+ *  | *  |  FG (0..7)
+ *  *    BG (0..7)    */
+#define SCTUI_FG(ATTR) ((ATTR) & 0x1000000f)
+#define SCTUI_BG(ATTR) ((ATTR) & 0x200000f0)
+#define SCTUI_FGSET(FG) (0x10000000 | (FG))
+#define SCTUI_BGSET(BG) (0x20000000 | ((BG) << 4))
+
+enum {
+	SCTUI_BLACK,
+	SCTUI_RED,
+	SCTUI_GREEN,
+	SCTUI_BROWN,
+	SCTUI_BLUE,
+	SCTUI_MAGENTA,
+	SCTUI_CYAN,
+	SCTUI_WHITE
+};
 
 struct sctui {
 	int init;
@@ -49,7 +70,15 @@ struct sctui {
 
 	char buf[SCTUI_OUT_BUF_SIZ];
 	int bufp;
+
+	char cbuf[128];
 };
+
+/* It use the 'global_sctui.cbuf', so it unsupports recursive use */
+extern const char *sctui_attr_off(void);
+
+/* It use the 'global_sctui.cbuf', so it unsupports recursive use */
+extern const char *sctui_attr_on(int attr);
 
 extern void sctui_commit(void);
 extern void sctui_fill_space(char *str, int len, int w);
@@ -76,7 +105,10 @@ extern struct sctui global_sctui;
 #include <sys/ioctl.h>
 #include <unistd.h>
 
-#define ESC_CLEAR_SCREEN     "\x1b[2J"
+#define ESC_CLEAR_SCREEN "\x1b[2J"
+#define ESC_SGR_RESET "0"
+#define ESC_SGR_BEG   "\x1b["
+#define ESC_SGR_END   "m"
 #define ESC_MOVE(R,L) "\x1b[" #R ";" #L "f"
 #define ESC_MOVEF     "\x1b[%d;%df"
 
@@ -100,6 +132,28 @@ _sctui_die(const char *msg, ...)
 	if (global_sctui.init)
 		sctui_fini();
 	exit(1);
+}
+
+const char *
+sctui_attr_off(void)
+{
+	strcpy(global_sctui.cbuf, ESC_SGR_BEG
+			ESC_SGR_RESET
+			ESC_SGR_END);
+	return global_sctui.cbuf;
+}
+
+const char *
+sctui_attr_on(int attr)
+{
+	char *s = global_sctui.cbuf;
+	s += sprintf(s, ESC_SGR_BEG);
+	if (SCTUI_BG(attr))
+		s += sprintf(s, ";%d", 40 + (attr & 0xf0));
+	if (SCTUI_FG(attr))
+		s += sprintf(s, ";%d", 30 + (attr & 0x0f));
+	s += sprintf(s, ESC_SGR_END);
+	return global_sctui.cbuf;
 }
 
 void

@@ -27,6 +27,7 @@
 #define refreshw(WREF) ((WREF)->refresh = 1)
 
 static void draw(void);
+static void draw_sel_line(void);
 static void draw_win(struct win *w);
 static struct line *empty_line(void);
 static void fini(void);
@@ -36,7 +37,7 @@ static struct marker *get_marker(int k);
 static void init(void);
 static void keypress(int k);
 static void move(struct win *w);
-static void render_line(struct line *l);
+static void render_line(const struct win *w, struct line *l);
 static int request_key(void);
 static void ruler(void);
 static void scroll(struct win *w);
@@ -69,9 +70,10 @@ static struct fbuf rulerbuf;
 /* state */
 static int         cmode = MODE_NOR;
 static struct tab *ctab;
-static int has_implicit_sel;
+static struct line *sel_line;
 /* numbers + lowers + suppers + '\'' */
 static struct marker markers[10 + 52 + 1];
+#define SEL_MARKER (10 + 52)
 
 static struct pollfd fds[1];
 static char sbuf[BUFSIZ];
@@ -101,10 +103,38 @@ draw(void)
 		}
 	}
 
+	if (sel_line)
+		draw_sel_line();
 	sctui_move(ctab->w->x + col,
 			ctab->w->y + ctab->w->row - ctab->w->rowoff);
 
 	sctui_commit();
+}
+
+void
+draw_sel_line(void)
+{
+	const char *tmp = sctui_attr_on(sel_attr);
+	int beg, to;
+	char buf[256], *p;
+
+	beg = markers[SEL_MARKER].col;
+	to = ctab->w->col;
+
+	if (beg > to) {
+		beg ^= to;
+		to ^= beg;
+		beg ^= to;
+	}
+
+	p = buf;
+	p += sprintf(p, tmp);
+	p += sprintf(p, "%.*s", to - beg, sel_line->r + beg);
+
+	sctui_text(ctab->w->x + beg, ctab->w->y + ctab->w->row - ctab->w->rowoff,
+			buf, p - buf);
+	tmp = sctui_attr_off();
+	sctui_out(tmp, strlen(tmp));
 }
 
 void
@@ -118,7 +148,7 @@ draw_win(struct win *w)
 	list_for_each(struct line, l, &w->draw->link, tmp, link) {
 		if (i >= w->h)
 			break;
-		render_line(l);
+		render_line(w, l);
 		sctui_text(w->x, w->y + i, l->r, w->w);
 		i++;
 	}
@@ -182,7 +212,7 @@ get_marker(int k)
 	} else if (k >= 'A' && k <= 'Z') {
 		k = k - 'A' + '9' + 26;
 	} else if (k == '\'') {
-		k = 10 + 52;
+		k = SEL_MARKER;
 	} else {
 		return NULL;
 	}
@@ -278,10 +308,12 @@ new_line(const union arg *arg)
 	l = ecalloc(1, sizeof(*l));
 	if (!(arg->i & 1))
 		prv = list_container_of(prv->link.prv, struct line, link);
-	list_insert(&ctab->w->fb->lines, &prv->link, &l->link);
+	list_insert(&ctab->w->fb->lines,
+			prv ? &prv->link : NULL,
+			&l->link);
 	ctab->w->fb->nline++;
 
-	if (arg->i & 1 << 1) {
+	if (arg->i & 1 << 1 && prv) {
 		s.s = prv->s.s + ctab->w->col;
 		s.len = prv->s.len - ctab->w->col;
 		s.siz = s.len + 1;
@@ -294,13 +326,14 @@ new_line(const union arg *arg)
 
 	move_row(&ARG(.i = (arg->i & 1)));
 
-	refreshl(prv);
+	if (prv)
+		refreshl(prv);
 	refreshl(l);
 	refreshw(ctab->w);
 }
 
 void
-render_line(struct line *l)
+render_line(const struct win *w, struct line *l)
 {
 	int p = 0, t;
 
@@ -549,7 +582,7 @@ insert(const union arg *arg)
 			estr_insert_str(&l->s, ctab->w->col - 1, &s);
 			s.s = (char*)(c + 1);
 			s.siz = s.len = 0;
-			new_line(&ARG(.i = 0 | 1 << 1));
+			new_line(&ARG(.i = 3));
 			continue;
 		}
 		s.len++;
@@ -612,6 +645,7 @@ move_col(const union arg *arg)
 {
 	ctab->w->col += arg->i;
 	scroll(ctab->w);
+	sel_line = NULL;
 }
 
 void
@@ -619,6 +653,7 @@ move_row(const union arg *arg)
 {
 	ctab->w->row += arg->i;
 	scroll(ctab->w);
+	sel_line = NULL;
 }
 
 void
@@ -632,25 +667,27 @@ sel_word(const union arg *arg)
 {
 	const char *beg, *end;
 	struct marker fake;
+	struct line *l;
 
-	beg = end = ctab->w->l->s.s + ctab->w->col;
+	l = ctab->w->l;
+	beg = end = l->s.s + ctab->w->col;
 
 	while (isalpha(*end))
 		end++;
-	while (beg != ctab->w->l->s.s && isalpha(*beg))
+	while (beg != l->s.s && isalpha(*beg))
 		beg--;
 	beg++;
 
 	get_rowcol(&fake);
 
-	fake.col = beg - ctab->w->l->s.s;
+	fake.col = beg - l->s.s;
 	set_rowcol(&fake);
 	mark(&ARG(.i = '\''));
 
-	fake.col = end - ctab->w->l->s.s;
+	fake.col = end - l->s.s;
 	set_rowcol(&fake);
 
-	has_implicit_sel = 1;
+	sel_line = l;
 }
 
 /* command functions */
@@ -751,10 +788,8 @@ main(int argc, char *argv[])
 	} GETARG_END;
 
 	init();
-	while (running) {
-		draw();
+	while (running)
 		keypress(request_key());
-	}
 	fini();
 
 	return 0;

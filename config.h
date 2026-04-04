@@ -1,3 +1,5 @@
+static const int sel_attr = SCTUI_BGSET(SCTUI_BLACK);
+
 static const char *tab_render = "        ";
 
 static const char *mode_str[] = {
