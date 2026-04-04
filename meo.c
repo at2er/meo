@@ -31,10 +31,12 @@ static void draw_win(struct win *w);
 static struct line *empty_line(void);
 static void fini(void);
 static const struct key *get_keys_table(void);
+static struct marker *get_marker(int k);
 static void init(void);
-static void keypress(void);
+static void keypress(int k);
 static void move(struct win *w);
 static void render_line(struct line *l);
+static int request_key(void);
 static void ruler(void);
 static void scroll(struct win *w);
 
@@ -65,6 +67,8 @@ static struct fbuf rulerbuf;
 /* state */
 static int         cmode = MODE_NOR;
 static struct tab *ctab;
+/* numbers + lowers + suppers + '\'' */
+static struct marker markers[10 + 52 + 1];
 
 static struct pollfd fds[1];
 static char sbuf[BUFSIZ];
@@ -78,9 +82,11 @@ void
 draw(void)
 {
 	int col = 0;
+
 	for (int i = 0; i < nwin; i++)
 		draw_win(&wins[i]);
 	draw_win(&bar);
+
 	for (int i = 0; i < ctab->w->col; i++) {
 		switch (ctab->w->l->s.s[i]) {
 		case '\t':
@@ -91,8 +97,10 @@ draw(void)
 			break;
 		}
 	}
+
 	sctui_move(ctab->w->x + col,
 			ctab->w->y + ctab->w->row - ctab->w->rowoff);
+
 	sctui_commit();
 }
 
@@ -152,6 +160,23 @@ get_keys_table(void)
 	return NULL;
 }
 
+struct marker *
+get_marker(int k)
+{
+	if (k >= '0' && k <= '9') {
+		k -= '0';
+	} else if (k >= 'a' && k <= 'z') {
+		k = k - 'a' + '9';
+	} else if (k >= 'A' && k <= 'Z') {
+		k = k - 'A' + '9' + 26;
+	} else if (k == '\'') {
+		k = 10 + 52;
+	} else {
+		return NULL;
+	}
+	return &markers[k];
+}
+
 void
 init(void)
 {
@@ -199,17 +224,15 @@ init(void)
 }
 
 void
-keypress(void)
+keypress(int k)
 {
 	char *buf;
-	int h, k;
+	int h;
 
-	if (!(fds[0].revents & POLLIN))
+	if (k == 0)
 		return;
 
-	k = sctui_grab_key();
 	h = skb_handle_key(k);
-	ruler();
 	if (!h && !(cmode == MODE_INS || cmode == MODE_CMD))
 		skb_ncombo = 0;
 	if (h)
@@ -295,6 +318,19 @@ render_line(struct line *l)
 			break;
 		}
 	}
+}
+
+int
+request_key(void)
+{
+	ruler();
+	draw();
+
+	if (poll(fds, 1, -1) == -1 && errno != EINTR)
+		die("poll()");
+	if (!(fds[0].revents & POLLIN))
+		return 0;
+	return sctui_grab_key();
 }
 
 void
@@ -454,6 +490,23 @@ goto_end(const union arg *arg)
 }
 
 void
+goto_mark(const union arg *arg)
+{
+	int k = request_key();
+	struct marker *m = get_marker(k);
+	if (!m)
+		return;
+	if (!m->fb)
+		return;
+	ctab->w->fb = m->fb;
+	ctab->w->row = m->row;
+	ctab->w->rowoff = m->rowoff;
+	ctab->w->col = m->col;
+	refreshw(ctab->w);
+	scroll(ctab->w);
+}
+
+void
 insert(const union arg *arg)
 {
 	const char *c;
@@ -480,6 +533,19 @@ insert(const union arg *arg)
 	estr_insert_str(&l->s, ctab->w->col - 1, &s);
 
 	move(ctab->w);
+}
+
+void
+mark(const union arg *arg)
+{
+	int k = request_key();
+	struct marker *m = get_marker(k);
+	if (!m)
+		return;
+	m->fb = ctab->w->fb;
+	m->row = ctab->w->row;
+	m->rowoff = ctab->w->rowoff;
+	m->col = ctab->w->col;
 }
 
 void
@@ -579,8 +645,8 @@ setwin:
 	ctab->w->col = fb->col;
 	ctab->w->fb = fb;
 	ctab->w->l = list_container_of(fb->lines.beg, struct line, link);
-	scroll(ctab->w);
 	refreshw(ctab->w);
+	scroll(ctab->w);
 }
 
 void
@@ -629,9 +695,7 @@ main(int argc, char *argv[])
 	init();
 	while (running) {
 		draw();
-		if (poll(fds, 1, -1) == -1 && errno != EINTR)
-			die("poll()");
-		keypress();
+		keypress(request_key());
 	}
 	fini();
 

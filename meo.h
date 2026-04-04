@@ -33,6 +33,11 @@ struct line {
 	struct utilsh_list link;
 };
 
+struct marker {
+	int row, rowoff, col;
+	struct fbuf *fb;
+};
+
 struct tab {
 	struct win *w;
 	struct win **wins;
@@ -52,7 +57,9 @@ static void cmd(const union arg *arg);
 static void delete(const union arg *arg);
 static void goto_beg(const union arg *arg);
 static void goto_end(const union arg *arg);
+static void goto_mark(const union arg *arg);
 static void insert(const union arg *arg);
+static void mark(const union arg *arg);
 static void mode(const union arg *arg);
 static void move_col(const union arg *arg);
 static void move_row(const union arg *arg);

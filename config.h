@@ -1,9 +1,10 @@
 static const char *tab_render = "        ";
 
 static const char *mode_str[] = {
-	[MODE_NOR] = NULL,
-	[MODE_INS] = "-- INS --",
-	[MODE_CMD] = NULL,
+	[MODE_NOR]    = NULL,
+	[MODE_INS]    = "-- INS --",
+	[MODE_CMD]    = NULL,
+	NULL
 };
 
 static const struct key normal_keys[] = {
@@ -16,9 +17,11 @@ static const struct key normal_keys[] = {
 	{"k",    move_row,    {.i = -1}      },
 	{"l",    move_col,    {.i =  1}      },
 	{"i",    mode,        {.i = MODE_INS}},
+	{"m",    mark,        {0}            },
 	{"o",    new_line,    {.i = 1}       },
 	{"O",    new_line,    {.i = 0}       },
 	{"q",    quit,        {0}            },
+	{"'",    goto_mark,   {0}            },
 	{":",    mode,        {.i = MODE_CMD}},
 	{"^d",   move_row,    {.i =  10}     },
 	{"^u",   move_row,    {.i = -10}     },
