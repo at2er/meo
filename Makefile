@@ -1,6 +1,6 @@
 CC = gcc
 CFLAGS = -D_DEFAULT_SOURCE -std=c99 -pedantic \
-	 -Wall -Wextra -Wno-unused-parameter -Iinclude -g3
+	 -Wall -Wextra -Wno-unused-parameter -Iinclude -g3 -ggdb
 AR = ar
 PREFIX = /usr/local
 

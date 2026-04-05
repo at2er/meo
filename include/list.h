@@ -48,12 +48,23 @@ struct utilsh_list_head {
 #define _utilsh_list_for_each_iter(CUR, TYPE, LINK) \
 	(CUR ? utilsh_list_container_of(CUR->LINK.nex, TYPE, LINK) : NULL)
 
-#define utilsh_list_for_each(TYPE, CUR, BEG, NEX, LINK) \
+#define _utilsh_list_for_each_iter_prv(CUR, TYPE, LINK) \
+	(CUR ? utilsh_list_container_of(CUR->LINK.prv, TYPE, LINK) : NULL)
+
+#define _utilsh_list_for_each(TYPE, CUR, BEG, NEX, LINK, ITER) \
 	for (TYPE *CUR = utilsh_list_container_of((BEG), TYPE, LINK), \
-			*NEX = _utilsh_list_for_each_iter(CUR, TYPE, LINK); \
+			*NEX = ITER(CUR, TYPE, LINK); \
 			CUR != NULL; \
 			CUR = NEX, \
-			NEX = _utilsh_list_for_each_iter(CUR, TYPE, LINK))
+			NEX = ITER(CUR, TYPE, LINK))
+
+#define utilsh_list_for_each(TYPE, CUR, BEG, NEX, LINK) \
+	_utilsh_list_for_each(TYPE, CUR, BEG, NEX, LINK, \
+			_utilsh_list_for_each_iter)
+
+#define utilsh_list_for_each_prv(TYPE, CUR, BEG, NEX, LINK) \
+	_utilsh_list_for_each(TYPE, CUR, BEG, NEX, LINK, \
+			_utilsh_list_for_each_iter_prv)
 
 #define utilsh_list_for_each_unsafe(TYPE, CUR, BEG, NEX, LINK) \
 	for (TYPE *CUR = utilsh_list_container_of((BEG), TYPE, LINK); \
@@ -72,6 +83,7 @@ void utilsh_list_remove(
 #ifdef UTILSH_LIST_STRIP
 #define list_container_of    utilsh_list_container_of
 #define list_for_each        utilsh_list_for_each
+#define list_for_each_prv    utilsh_list_for_each_prv
 #define list_for_each_unsafe utilsh_list_for_each_unsafe
 #define list_init            utilsh_list_init
 #define list_insert          utilsh_list_insert

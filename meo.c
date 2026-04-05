@@ -36,7 +36,10 @@ static void draw_win(struct win *w);
 static void empty_fbuf(struct fbuf *fb);
 static struct line *empty_line(void);
 static void fini(void);
+static void get_draw_line(struct win *w);
 static const struct key *get_keys_table(void);
+static void get_line_nex(struct win *w, int step);
+static void get_line_prv(struct win *w, int step);
 static struct marker *get_marker(int k);
 static void get_rowcol(struct marker *m);
 static int get_rx(int col, int rx);
@@ -46,13 +49,13 @@ static void init(void);
 static void keypress(int k);
 static int match(const char *str);
 static int mode_can_insert(void);
-static void move(struct win *w);
 static void render_line(const struct win *w, struct line *l);
 static int request_key(void);
 static void ruler(void);
-static void scroll(struct win *w);
 static int search_nex(void);
 static int search_prv(void);
+static void set_col(struct win *w, int row);
+static void set_row(struct win *w, int row);
 static void set_rowcol(struct marker *m);
 
 static const char *usages[] = {
@@ -102,6 +105,8 @@ draw(void)
 {
 	for (int i = 0; i < nwin; i++)
 		draw_win(&wins[i]);
+
+	ruler();
 	draw_win(&bar);
 
 	if (has_sel)
@@ -177,6 +182,24 @@ fini(void)
 	sctui_fini();
 }
 
+void
+get_draw_line(struct win *w)
+{
+	int i = 0, c = w->row - w->rowoff;
+	if (w->row == w->rowoff) {
+		w->draw = w->l;
+		return;
+	}
+
+	list_for_each_prv(struct line, l, &w->l->link, tmp, link) {
+		if (i >= c) {
+			w->draw = l;
+			break;
+		}
+		i++;
+	}
+}
+
 const struct key *
 get_keys_table(void)
 {
@@ -193,6 +216,30 @@ get_keys_table(void)
 	die("get_keys_table()");
 
 	return NULL;
+}
+
+void
+get_line_nex(struct win *w, int step)
+{
+	list_for_each(struct line, l, &w->l->link, tmp, link) {
+		if (step <= 0) {
+			w->l = l;
+			break;
+		}
+		step--;
+	}
+}
+
+void
+get_line_prv(struct win *w, int step)
+{
+	list_for_each_prv(struct line, l, &w->l->link, tmp, link) {
+		if (step <= 0) {
+			w->l = l;
+			break;
+		}
+		step--;
+	}
 }
 
 struct marker *
@@ -296,8 +343,6 @@ init(void)
 	bar.l = bar.draw = lineof(bar.fb->lines.beg);
 	refreshw(&bar);
 
-	ruler();
-
 	if (!entry)
 		cmd_edit(0, NULL);
 	else
@@ -337,10 +382,9 @@ match(const char *str)
 
 	r = !regexec(pattern, str, MAX_MACHES, matches, 0);
 	if (r) {
-		ctab->w->col = matches[0].rm_so;
-		scroll(ctab->w);
+		set_col(ctab->w, matches[0].rm_so);
 		get_rowcol(&SEL_MARKER);
-		ctab->w->col = matches[0].rm_eo;
+		set_col(ctab->w, matches[0].rm_eo);
 		has_sel = ctab->w->l;
 	}
 
@@ -357,16 +401,6 @@ mode_can_insert(void)
 		return 1;
 	}
 	return 0;
-}
-
-void
-move(struct win *w)
-{
-	struct marker m = {w->row, w->rowoff, w->col, w->fb};
-	set_rowcol(&m);
-	ruler();
-	refreshw(w);
-	has_sel = NULL;
 }
 
 void
@@ -436,7 +470,6 @@ render_line(const struct win *w, struct line *l)
 int
 request_key(void)
 {
-	ruler();
 	draw();
 
 	if (poll(fds, 1, -1) == -1 && errno != EINTR)
@@ -479,35 +512,6 @@ ruler(void)
 	refreshw(&bar);
 }
 
-void
-scroll(struct win *w)
-{
-	int i = 0, max;
-
-	w->row = align(w->row, 0, w->fb->nline - 1);
-	if (w->row <= w->rowoff)
-		w->rowoff = w->row;
-	else if (w->row >= w->rowoff + w->h)
-		w->rowoff = w->row - w->h + 1;
-	list_for_each(struct line, l, w->fb->lines.beg, tmp, link) {
-		if (i == w->rowoff)
-			w->draw = l;
-		if (i >= w->row) {
-			w->l = l;
-			break;
-		}
-		i++;
-	}
-
-	if (w->l)
-		max = w->l->s.len - 1;
-	else
-		max = 0;
-	w->col = align(w->col, 0, max);
-
-	move(w);
-}
-
 int
 search_nex(void)
 {
@@ -533,17 +537,51 @@ search_prv(void)
 }
 
 void
+set_col(struct win *w, int col)
+{
+	ctab->w->col = align(col, 0, ctab->w->l->s.len - 1);
+	ctab->w->fb->col = ctab->w->col;
+}
+
+void
+set_row(struct win *w, int row)
+{
+	int orig = w->row;
+
+	w->row = align(row, 0, w->fb->nline - 1);
+	if (w->row <= w->rowoff)
+		w->rowoff = w->row;
+	else if (w->row >= w->rowoff + w->h)
+		w->rowoff = w->row - w->h + 1;
+	w->fb->row = w->row;
+	w->fb->rowoff = w->rowoff;
+
+	refreshw(w);
+
+	if (w->row == 0) {
+		w->l = lineof(w->fb->lines.beg);
+	} else if (w->row == w->fb->nline - 1) {
+		w->l = lineof(w->fb->lines.end);
+	}
+
+	if (w->row > orig)
+		get_line_nex(w, w->row - orig);
+	else if (w->row < orig)
+		get_line_prv(w, orig - w->row);
+	get_draw_line(w);
+
+	set_col(w, w->col);
+}
+
+void
 set_rowcol(struct marker *m)
 {
 	ctab->w->fb = m->fb;
-
-	ctab->w->fb->row = m->row;
-	ctab->w->fb->rowoff = m->rowoff;
-	ctab->w->fb->col = m->col;
-
-	ctab->w->row = m->row;
-	ctab->w->rowoff = m->rowoff;
-	ctab->w->col = m->col;
+	set_row(ctab->w, m->row);
+	set_col(ctab->w, m->col);
+	ctab->w->fb->row = ctab->w->row;
+	ctab->w->fb->rowoff = ctab->w->rowoff;
+	ctab->w->fb->col = ctab->w->col;
 }
 
 /* key functions */
@@ -570,7 +608,6 @@ cmd(const union arg *arg)
 		bar.l->s.s[0] = '\n';
 		bar.l->s.s[1] = '\0';
 		bar.l->s.len = 1;
-		scroll(&bar);
 		refreshl(bar.l);
 		refreshw(&bar);
 	}
@@ -652,15 +689,12 @@ goto_beg(const union arg *arg)
 {
 	switch (arg->i) {
 	case GOTO_IN_FILE:
-		ctab->w->row = 0;
+		set_row(ctab->w, 0);
 		break;
 	case GOTO_IN_LINE:
-		ctab->w->col = 0;
+		set_col(ctab->w, 0);
 		break;
-	default:
-		return;
 	}
-	scroll(ctab->w);
 }
 
 void
@@ -668,15 +702,12 @@ goto_end(const union arg *arg)
 {
 	switch (arg->i) {
 	case GOTO_IN_FILE:
-		ctab->w->row = ctab->w->fb->nline - 1;
+		set_row(ctab->w, ctab->w->fb->nline - 1);
 		break;
 	case GOTO_IN_LINE:
-		ctab->w->col = ctab->w->l->s.len - 1;
+		set_col(ctab->w, ctab->w->l->s.len - 1);
 		break;
-	default:
-		return;
 	}
-	scroll(ctab->w);
 }
 
 void
@@ -697,8 +728,6 @@ goto_mark(const union arg *arg)
 		return;
 
 	set_rowcol(m);
-	refreshw(ctab->w);
-	scroll(ctab->w);
 }
 
 void
@@ -719,15 +748,13 @@ insert(const union arg *arg)
 			continue;
 		}
 		s.len++;
-		ctab->w->col++;
+		set_col(ctab->w, ctab->w->col + 1);
 	}
 
 	refreshl(l);
 	refreshw(ctab->w);
 
 	estr_insert_str(&l->s, ctab->w->col - 1, &s);
-
-	move(ctab->w);
 }
 
 void
@@ -761,7 +788,6 @@ mode(const union arg *arg)
 		cmdback = ctab->w;
 		ctab->w = &bar;
 		refreshw(ctab->w);
-		scroll(&bar);
 		break;
 	default:
 		if (orig == MODE_CMD || orig == MODE_SEARCH) {
@@ -776,15 +802,15 @@ mode(const union arg *arg)
 void
 move_col(const union arg *arg)
 {
-	ctab->w->col += arg->i;
-	scroll(ctab->w);
+	set_col(ctab->w, ctab->w->col + arg->i);
+	has_sel = NULL;
 }
 
 void
 move_row(const union arg *arg)
 {
-	ctab->w->row += arg->i;
-	scroll(ctab->w);
+	set_row(ctab->w, ctab->w->row + arg->i);
+	has_sel = NULL;
 }
 
 void
@@ -818,7 +844,6 @@ search(const union arg *arg)
 		return;
 
 	set_rowcol(&orig);
-	scroll(ctab->w);
 	has_sel = NULL;
 }
 
@@ -830,7 +855,12 @@ sel_word(const union arg *arg)
 	struct line *l;
 
 	l = ctab->w->l;
-	beg = end = l->s.s + ctab->w->col;
+	beg = l->s.s + ctab->w->col;
+
+	has_sel = NULL;
+	while (isspace(*beg))
+		beg++;
+	end = beg;
 
 	while (isalpha(*end) || *end == '_')
 		end++;
@@ -854,6 +884,7 @@ sel_word(const union arg *arg)
 	set_rowcol(&fake);
 
 	has_sel = l;
+	refreshw(ctab->w);
 }
 
 /* command functions */
@@ -903,8 +934,6 @@ cmd_edit(int argc, const char *argv[])
 	fclose(fp);
 setwin:
 	set_rowcol(&(struct marker){fb->row, fb->rowoff, fb->col, fb});
-	ctab->w->l = lineof(fb->lines.beg);
-	scroll(ctab->w);
 }
 
 void
