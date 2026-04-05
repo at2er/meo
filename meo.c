@@ -93,10 +93,14 @@ static char *regs[1];
 /* state */
 static int         cmode = MODE_NOR;
 static struct tab *ctab;
+
 static struct line *has_sel;
+
 /* numbers + lowers + suppers + '\'' */
 static struct marker markers[10 + 52 + 1];
 #define SEL_MARKER markers[10 + 52]
+
+static struct line *matched;
 static regmatch_t matches[MAX_MACHES];
 static regex_t *pattern;
 
@@ -452,13 +456,14 @@ match(const char *str)
 	if (!pattern)
 		return 0;
 
+	matched = NULL;
+
 	r = !regexec(pattern, str, MAX_MACHES, matches, 0);
 	if (r) {
 		set_col(ctab->w, matches[0].rm_so);
 		get_rowcol(&SEL_MARKER);
-		set_row(ctab->w, ctab->w->row);
 		set_col(ctab->w, matches[0].rm_eo);
-		has_sel = ctab->w->l;
+		matched = has_sel = ctab->w->l;
 	}
 
 	return r;
@@ -599,24 +604,39 @@ ruler(void)
 int
 search_nex(void)
 {
-	while (ctab->w->row < ctab->w->fb->nline) {
+	if (matched) {
+		if (ctab->w->row >= ctab->w->fb->nline - 1)
+			return 0;
+		move_row(&ARG(.i = 1));
+	}
+	do {
 		if (match(ctab->w->l->s.s))
 			return 1;
-		ctab->w->row++;
-		ctab->w->l = lineof(ctab->w->l->link.nex);
-	}
+		if (ctab->w->row >= ctab->w->fb->nline - 1)
+			break;
+		move_row(&ARG(.i = 1));
+	} while (1);
+
 	return 0;
 }
 
 int
 search_prv(void)
 {
-	while (ctab->w->row >= 0) {
+	if (matched) {
+		if (ctab->w->row <= 0)
+			return 0;
+		move_row(&ARG(.i = -1));
+	}
+
+	do {
 		if (match(ctab->w->l->s.s))
 			return 1;
-		ctab->w->row--;
-		ctab->w->l = lineof(ctab->w->l->link.prv);
-	}
+		if (ctab->w->row <= 0)
+			break;
+		move_row(&ARG(.i = 1));
+	} while (1);
+
 	return 0;
 }
 
@@ -718,7 +738,7 @@ change(const union arg *arg)
 void
 cmd(const union arg *arg)
 {
-	int argc = 0;
+	int argc = 0, m = cmode;
 	char **argv = NULL;
 	char *tok, *dup, *saver;
 
@@ -735,7 +755,10 @@ cmd(const union arg *arg)
 		refreshw(&bar);
 	}
 
-	if (cmode == MODE_CMD) {
+	mode(&ARG(.i = MODE_NOR));
+
+	switch (m) {
+	case MODE_CMD:
 		for (tok = dup; ; tok = NULL) {
 			if (!(tok = strtok_r(tok, " \t\n", &saver)))
 				break;
@@ -743,9 +766,8 @@ cmd(const union arg *arg)
 		}
 		darr_append(argv, argc, NULL);
 		argc--;
-	}
-
-	if (cmode == MODE_SEARCH) {
+		break;
+	case MODE_SEARCH:
 		if (pattern)
 			regfree(pattern);
 		if (!pattern)
@@ -754,9 +776,9 @@ cmd(const union arg *arg)
 			free(pattern);
 			pattern = NULL;
 		}
+		match(ctab->w->l->s.s);
+		break;
 	}
-
-	mode(&ARG(.i = MODE_NOR));
 
 	if (!argc || !argv[0])
 		goto end;
@@ -950,6 +972,10 @@ search(const union arg *arg)
 {
 	int (*fn)(void) = search_nex;
 	struct marker orig;
+
+	if (!pattern)
+		return;
+
 	get_rowcol(&orig);
 
 	/* TODO: search in same line */
@@ -959,12 +985,12 @@ search(const union arg *arg)
 		return;
 
 	if (arg->i == -1) {
-		ctab->w->row = ctab->w->fb->nline - 1;
-		ctab->w->l = lineof(ctab->w->fb->lines.end);
+		goto_end(&ARG(.i = GOTO_IN_FILE));
 	} else {
-		ctab->w->row = 0;
-		ctab->w->l = lineof(ctab->w->fb->lines.beg);
+		goto_beg(&ARG(.i = GOTO_IN_FILE));
 	}
+
+	matched = NULL;
 
 	if (fn())
 		return;
