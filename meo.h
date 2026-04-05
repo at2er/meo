@@ -20,12 +20,18 @@ struct cmd {
 	void (*func)(int argc, const char *argv[]);
 };
 
+struct marker {
+	struct fbuf *fb;
+	struct line *l;
+	int row, rowoff, col;
+};
+
 struct fbuf {
 	struct utilsh_list_head lines;
 	int nline;
 	char path[FILENAME_MAX];
 
-	int row, rowoff, col;
+	struct marker pos;
 };
 
 struct line {
@@ -33,11 +39,6 @@ struct line {
 	char r[VLINE_RENDER_MAX];
 
 	struct utilsh_list link;
-};
-
-struct marker {
-	int row, rowoff, col;
-	struct fbuf *fb;
 };
 
 struct tab {
@@ -67,6 +68,7 @@ static void mode(const union arg *arg);
 static void move_col(const union arg *arg);
 static void move_row(const union arg *arg);
 static void new_line(const union arg *arg);
+static void paste(const union arg *arg);
 static void quit(const union arg *arg);
 static void search(const union arg *arg);
 static void sel_word(const union arg *arg);

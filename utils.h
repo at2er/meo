@@ -3,12 +3,12 @@
 #define UTILS_H
 #include <stddef.h>
 
-#define ABS(X)    ((X) < 0 ? -(X) : (X))
-#define MAX(A, B) ((A) > (B) ? (A) : (B))
-#define MIN(A, B) ((A) < (B) ? (A) : (B))
-#define LENGTH(A) (sizeof(A) / sizeof((A)[0]))
-#define MSEC_TO_CLOCKS(MSEC) ((MSEC) * 1000)
-#define test_flag(FLAGS, FLAG) ((FLAGS) & (FLAG))
+#define xor_swap(A, B) \
+	do { \
+		(A) ^= (B); \
+		(B) ^= (A); \
+		(A) ^= (B); \
+	} while (0)
 
 int align(int num, int min, int max);
 void die(const char *msg, ...);

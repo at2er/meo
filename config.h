@@ -1,3 +1,12 @@
+static const char **
+copy_cmd()
+{
+	static const char *c[] = {"wl-copy", NULL};
+	if (!getenv("WAYLAND_DISPLAY"))
+		return NULL;
+	return c;
+}
+
 static const int sel_attr = SCTUI_BGSET(SCTUI_BLACK);
 
 static const char *tab_render = "        ";
@@ -29,6 +38,7 @@ static const struct key normal_keys[] = {
 	{"N",    search,      {.i = -1}          },
 	{"o",    new_line,    {.i = DOWN}        },
 	{"O",    new_line,    {.i = UP}          },
+	{"p",    paste,       {.i = '+'}         },
 	{"q",    quit,        {0}                },
 	{"w",    sel_word,    {0}                },
 	{"'",    goto_mark,   {0}                },
