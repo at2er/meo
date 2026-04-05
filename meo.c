@@ -36,10 +36,11 @@ static void draw_win(struct win *w);
 static void empty_fbuf(struct fbuf *fb);
 static struct line *empty_line(void);
 static void fini(void);
-static int get_cursor_y(void);
 static const struct key *get_keys_table(void);
 static struct marker *get_marker(int k);
 static void get_rowcol(struct marker *m);
+static int get_rx(int col, int rx);
+static int get_ry(void);
 static void get_sel_area(int *beg, int *end);
 static void init(void);
 static void keypress(int k);
@@ -99,26 +100,13 @@ static const char *entry;
 void
 draw(void)
 {
-	int col = 0;
-
 	for (int i = 0; i < nwin; i++)
 		draw_win(&wins[i]);
 	draw_win(&bar);
 
-	for (int i = 0; i < ctab->w->col; i++) {
-		switch (ctab->w->l->s.s[i]) {
-		case '\t':
-			col += strlen(tab_render);
-			break;
-		default:
-			col++;
-			break;
-		}
-	}
-
 	if (has_sel)
 		draw_sel();
-	sctui_move(ctab->w->x + col, get_cursor_y());
+	sctui_move(get_rx(ctab->w->col, 0), get_ry());
 
 	sctui_commit();
 }
@@ -134,9 +122,10 @@ draw_sel(void)
 
 	p = buf;
 	p += sprintf(p, tmp);
-	p += sprintf(p, "%.*s", to - beg, has_sel->r + beg);
+	p += sprintf(p, "%.*s", to - beg,
+			has_sel->r + get_rx(beg, 0) - ctab->w->x);
 
-	sctui_text(ctab->w->x + beg, get_cursor_y(), buf, p - buf);
+	sctui_text(get_rx(beg, 0), get_ry(), buf, p - buf);
 	tmp = sctui_attr_off();
 	sctui_out(tmp, strlen(tmp));
 }
@@ -188,12 +177,6 @@ fini(void)
 	sctui_fini();
 }
 
-int
-get_cursor_y(void)
-{
-	return ctab->w->y + ctab->w->row - ctab->w->rowoff;
-}
-
 const struct key *
 get_keys_table(void)
 {
@@ -236,6 +219,28 @@ get_rowcol(struct marker *m)
 	m->row = ctab->w->row;
 	m->rowoff = ctab->w->rowoff;
 	m->col = ctab->w->col;
+}
+
+int
+get_rx(int col, int rx)
+{
+	for (int i = 0; i < col; i++) {
+		switch (ctab->w->l->s.s[i]) {
+		case '\t':
+			rx += strlen(tab_render);
+			break;
+		default:
+			rx++;
+			break;
+		}
+	}
+	return ctab->w->x + rx;
+}
+
+int
+get_ry(void)
+{
+	return ctab->w->y + ctab->w->row - ctab->w->rowoff;
 }
 
 void
@@ -588,8 +593,7 @@ cmd(const union arg *arg)
 		regcomp(pattern, dup, REG_NEWLINE); /* TODO: error handle */
 	}
 
-	cmode = MODE_NOR;
-	ctab->w = cmdback;
+	mode(&ARG(.i = MODE_NOR));
 
 	if (!argc || !argv[0])
 		goto end;
@@ -764,7 +768,6 @@ mode(const union arg *arg)
 			bar.fb = &rulerbuf;
 			ctab->w = cmdback;
 			refreshw(ctab->w);
-			scroll(&bar);
 		}
 		break;
 	}
@@ -829,11 +832,17 @@ sel_word(const union arg *arg)
 	l = ctab->w->l;
 	beg = end = l->s.s + ctab->w->col;
 
-	while (isalpha(*end))
+	while (isalpha(*end) || *end == '_')
 		end++;
-	while (beg != l->s.s && isalpha(*beg))
+	do {
+		if (beg == l->s.s)
+			break;
 		beg--;
-	beg++;
+		if (!isalpha(*beg) && *beg != '_') {
+			beg++;
+			break;
+		}
+	} while (1);
 
 	get_rowcol(&fake);
 
