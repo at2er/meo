@@ -679,6 +679,36 @@ set_rowcol(struct marker *m)
 
 /* key functions */
 void
+concat_line(const union arg *arg)
+{
+	struct line *l = ctab->w->l, *prv;
+
+	if (arg->i == -1) {
+		prv = lineof(l->link.prv);
+		if (!prv)
+			return;
+		ctab->w->col = prv->s.len;
+		move_row(&ARG(.i = -1));
+	} else {
+		prv = l;
+		l = lineof(l->link.nex);
+		if (!l)
+			return;
+	}
+
+	prv->s.len -= 1; /* remove the '\n' */
+	estr_append_str(&prv->s, &l->s);
+
+	list_remove(&ctab->w->fb->lines, &l->link);
+
+	str_free(&l->s);
+	free(l);
+
+	refreshl(prv);
+	refreshw(ctab->w);
+}
+
+void
 change(const union arg *arg)
 {
 	delete(arg);
@@ -746,18 +776,20 @@ end:
 void
 delete(const union arg *arg)
 {
-	struct line *l = ctab->w->l, *prv;
+	struct line *l = ctab->w->l;
 	int pos, len, t;
 
 	if (arg->i == 0) {
 		if (has_sel) {
 			get_sel_area(&pos, &t);
 			len = t - pos;
-		} else if (ctab->w->col < (int)ctab->w->l->s.len - 1) {
+		} else {
 			pos = ctab->w->col;
 			len = 1;
-		} else {
-			return;
+			if (pos >= (int)ctab->w->l->s.len - 1) {
+				concat_line(&ARG(0));
+				return;
+			}
 		}
 	} else {
 		pos = ctab->w->col - arg->i;
@@ -765,23 +797,7 @@ delete(const union arg *arg)
 	}
 
 	if (pos < 0) {
-		prv = lineof(l->link.prv);
-		if (!prv)
-			return;
-		ctab->w->col = prv->s.len;
-
-		move_row(&ARG(.i = -1));
-
-		prv->s.len -= 1; /* remove the '\n' */
-		estr_append_str(&prv->s, &l->s);
-
-		list_remove(&ctab->w->fb->lines, &l->link);
-
-		str_free(&l->s);
-		free(l);
-
-		refreshl(prv);
-		refreshw(ctab->w);
+		concat_line(&ARG(.i = -1));
 		return;
 	}
 
