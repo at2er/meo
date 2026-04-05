@@ -54,6 +54,7 @@ static int request_key(void);
 static void ruler(void);
 static int search_nex(void);
 static int search_prv(void);
+static void set_bar_buf(struct fbuf *fb);
 static void set_col(struct win *w, int row);
 static void set_row(struct win *w, int row);
 static void set_rowcol(struct marker *m);
@@ -384,6 +385,7 @@ match(const char *str)
 	if (r) {
 		set_col(ctab->w, matches[0].rm_so);
 		get_rowcol(&SEL_MARKER);
+		set_row(ctab->w, ctab->w->row);
 		set_col(ctab->w, matches[0].rm_eo);
 		has_sel = ctab->w->l;
 	}
@@ -537,10 +539,20 @@ search_prv(void)
 }
 
 void
+set_bar_buf(struct fbuf *fb)
+{
+	bar.fb = fb;
+	bar.l = bar.draw = lineof(fb->lines.beg);
+	set_col(&bar, 0);
+	refreshw(&bar);
+}
+
+void
 set_col(struct win *w, int col)
 {
 	ctab->w->col = align(col, 0, ctab->w->l->s.len - 1);
 	ctab->w->fb->col = ctab->w->col;
+	refreshw(ctab->w);
 }
 
 void
@@ -748,13 +760,14 @@ insert(const union arg *arg)
 			continue;
 		}
 		s.len++;
-		set_col(ctab->w, ctab->w->col + 1);
+		ctab->w->col++;
 	}
 
 	refreshl(l);
 	refreshw(ctab->w);
 
 	estr_insert_str(&l->s, ctab->w->col - 1, &s);
+	set_col(ctab->w, ctab->w->col);
 }
 
 void
@@ -784,16 +797,15 @@ mode(const union arg *arg)
 	switch (cmode) {
 	case MODE_CMD:
 	case MODE_SEARCH:
-		bar.fb = &cmdbuf;
+		has_sel = NULL;
+		set_bar_buf(&cmdbuf);
 		cmdback = ctab->w;
 		ctab->w = &bar;
-		refreshw(ctab->w);
 		break;
 	default:
 		if (orig == MODE_CMD || orig == MODE_SEARCH) {
-			bar.fb = &rulerbuf;
+			set_bar_buf(&rulerbuf);
 			ctab->w = cmdback;
-			refreshw(ctab->w);
 		}
 		break;
 	}
