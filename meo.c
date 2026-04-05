@@ -11,7 +11,6 @@
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
-#include <sys/wait.h>
 #include <unistd.h>
 
 #define UTILSH_LIST_STRIP
@@ -30,6 +29,7 @@
 #define refreshl(LREF) (*(LREF)->r = 0)
 #define refreshw(WREF) ((WREF)->refresh = 1)
 
+static void comp_pattern(const char *p, int len);
 static void copy(const char *s);
 static void draw(void);
 static void draw_sel(void);
@@ -58,6 +58,8 @@ static int request_key(void);
 static void ruler(void);
 static int search_nex(void);
 static int search_prv(void);
+static void sel_word_nex(const char **beg, const char **end);
+static void sel_word_prv(const char **beg, const char **end);
 static void set_bar_buf(struct fbuf *fb);
 static void set_col(struct win *w, int col);
 static void set_row(struct win *w, int row);
@@ -113,10 +115,27 @@ static const char *entry;
 #include "config.h"
 
 void
+comp_pattern(const char *p, int len)
+{
+	char *dup = (char*)p;
+	if (len != 0)
+		dup = strndup(p, len);
+	if (pattern)
+		regfree(pattern);
+	if (!pattern)
+		pattern = ecalloc(1, sizeof(*pattern));
+	if (regcomp(pattern, dup, REG_NEWLINE)) {
+		free(pattern);
+		pattern = NULL;
+	}
+}
+
+void
 copy(const char *s)
 {
 	const char **cmd = NULL;
 	int fds[2];
+	struct sigaction sa;
 
 	if (!(cmd = copy_cmd()))
 		return;
@@ -125,6 +144,13 @@ copy(const char *s)
 		die("pipe()");
 
 	if (fork() == 0) {
+		setsid();
+
+		sigemptyset(&sa.sa_mask);
+		sa.sa_flags = 0;
+		sa.sa_handler = SIG_DFL;
+		sigaction(SIGCHLD, &sa, NULL);
+
 		close(fds[1]);
 		if (dup2(fds[0], STDIN_FILENO) < 0)
 			die("dup2()");
@@ -136,7 +162,6 @@ copy(const char *s)
 	close(fds[0]);
 	write(fds[1], s, strlen(s));
 	close(fds[1]);
-	wait(NULL);
 }
 
 void
@@ -362,16 +387,18 @@ get_ry(void)
 int
 get_sel_area(int *beg, int *end)
 {
-	int b = SEL_MARKER.col, e = ctab->w->col;
+	int r = 1, b = SEL_MARKER.col, e = ctab->w->col;
 	if (!has_sel) {
 		*beg = *end = 0;
 		return 0;
 	}
-	if (b > e)
+	if (b > e) {
 		xor_swap(b, e);
+		r = 2;
+	}
 	*beg = b;
 	*end = e;
-	return 1;
+	return r;
 }
 
 void
@@ -641,6 +668,66 @@ search_prv(void)
 }
 
 void
+sel_word_nex(const char **beg, const char **end)
+{
+	const char *b = *beg, *e = *end;
+	while (!isalpha(*b))
+		b++;
+	e = b;
+
+	while (isalpha(*e) || *e == '_')
+		e++;
+	do {
+		if (b == ctab->w->l->s.s)
+			break;
+		b--;
+		if (!isalpha(*b) && *b != '_') {
+			b++;
+			break;
+		}
+	} while (1);
+	*beg = b;
+	*end = e;
+}
+
+void
+sel_word_prv(const char **beg, const char **end)
+{
+	const char *b = *beg, *e = *beg;
+	int skip = 0;
+
+	if (isalpha(*e) || *e == '_')
+		skip = 1;
+
+	do {
+		if (e == ctab->w->l->s.s)
+			break;
+		e--;
+		if (skip && (isalpha(*e) || *e == '_'))
+			continue;
+		skip = 0;
+		if (isalpha(*e) || *e == '_') {
+			e++;
+			break;
+		}
+	} while (1);
+
+	b = e;
+	do {
+		if (b == ctab->w->l->s.s)
+			break;
+		b--;
+		if (!isalpha(*b) && *b != '_') {
+			b++;
+			break;
+		}
+	} while (1);
+
+	*beg = e;
+	*end = b;
+}
+
+void
 set_bar_buf(struct fbuf *fb)
 {
 	bar.fb = fb;
@@ -768,14 +855,7 @@ cmd(const union arg *arg)
 		argc--;
 		break;
 	case MODE_SEARCH:
-		if (pattern)
-			regfree(pattern);
-		if (!pattern)
-			pattern = ecalloc(1, sizeof(*pattern));
-		if (regcomp(pattern, dup, REG_NEWLINE)) {
-			free(pattern);
-			pattern = NULL;
-		}
+		comp_pattern(dup, 0);
 		match(ctab->w->l->s.s);
 		break;
 	}
@@ -803,7 +883,8 @@ delete(const union arg *arg)
 
 	if (arg->i == 0) {
 		if (has_sel) {
-			get_sel_area(&pos, &t);
+			if (get_sel_area(&pos, &t) == 2)
+				has_sel = NULL;
 			len = t - pos;
 		} else {
 			pos = ctab->w->col;
@@ -828,7 +909,8 @@ delete(const union arg *arg)
 	estr_remove(&l->s, pos, len);
 	refreshl(l);
 	refreshw(ctab->w);
-	move_col(&ARG(.i = arg->i == 0 ? 0 : -len));
+	if (!(arg->i == 0 && !has_sel))
+		move_col(&ARG(.i = -len));
 }
 
 void
@@ -1009,33 +1091,29 @@ sel_word(const union arg *arg)
 	l = ctab->w->l;
 	beg = l->s.s + ctab->w->col;
 
-	while (isspace(*beg))
-		beg++;
-	end = beg;
-
-	while (isalpha(*end) || *end == '_')
-		end++;
-	do {
-		if (beg == l->s.s)
-			break;
-		beg--;
-		if (!isalpha(*beg) && *beg != '_') {
-			beg++;
-			break;
-		}
-	} while (1);
+	if (arg->i > 0)
+		sel_word_nex(&beg, &end);
+	else
+		sel_word_prv(&beg, &end);
 
 	get_rowcol(&fake);
 
 	fake.col = beg - l->s.s;
 	set_rowcol(&fake);
-	mark(&ARG(.i = '\''));
+	jumping();
 
 	fake.col = end - l->s.s;
 	set_rowcol(&fake);
 
-	has_sel = l;
 	refreshw(ctab->w);
+
+	if (beg > end) {
+		const char *t = beg;
+		beg = end;
+		end = t;
+	}
+	comp_pattern(beg, end - beg);
+	matched = has_sel;
 }
 
 void
