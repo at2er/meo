@@ -111,28 +111,24 @@ int skb_ncombo;
 static int
 _skb_compare_key(const char *key, int pressed)
 {
-#define SLASH_KEY(K, C) \
+#define SPECIAL(K, P, C) \
 	if (pressed == (K)) { \
-		if (key[0] == '/' && key[1] == (C)) \
+		if (key[0] == (P) && key[1] == (C)) \
 			return 2; \
 		return 0; \
 	}
-#define SPECIAL_CHR(C) (pressed == (C) && key[0] == (C) && key[1] == (C))
-	SLASH_KEY(127,  'b') else
-	SLASH_KEY(13,   'r') else
-	SLASH_KEY(27,   'e')
-	else if (iscntrl(pressed)) {
+	SPECIAL(127, '/', 'b') else
+	SPECIAL(13,  '/', 'r') else
+	SPECIAL(27,  '/', 'e') else
+	SPECIAL('/', '/', '/') else
+	SPECIAL('^', '^', '^') else
+	if (iscntrl(pressed)) {
 		if (key[0] != '^')
 			return 0;
 		if (TK_CTRL(key[1]) == TK_CTRL(pressed))
 			return 2;
-	} else if (SPECIAL_CHR('/')) {
-		return 2;
-	} else if (SPECIAL_CHR('^')) {
-		return 2;
 	}
-#undef SLASH_KEY
-#undef SPECIAL_CHR
+#undef SPECIAL
 	if (pressed != key[0])
 		return 0;
 	return 1;

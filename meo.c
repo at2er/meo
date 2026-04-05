@@ -47,7 +47,7 @@ static char **get_reg(int k);
 static void get_rowcol(struct marker *m);
 static int get_rx(int col);
 static int get_ry(void);
-static void get_sel_area(int *beg, int *end);
+static int get_sel_area(int *beg, int *end);
 static void init(void);
 static void jumping(void);
 static void keypress(int k);
@@ -144,8 +144,7 @@ draw(void)
 	ruler();
 	draw_win(&bar);
 
-	if (has_sel)
-		draw_sel();
+	draw_sel();
 	sctui_move(get_rx(ctab->w->col), get_ry());
 
 	sctui_commit();
@@ -154,12 +153,14 @@ draw(void)
 void
 draw_sel(void)
 {
-	const char *tmp = sctui_attr_on(sel_attr);
+	const char *tmp;
 	int beg, to;
 	char buf[256], *p;
 
-	get_sel_area(&beg, &to);
+	if (!get_sel_area(&beg, &to))
+		return;
 
+	tmp = sctui_attr_on(sel_attr);
 	beg = get_rx(beg);
 	to = get_rx(to);
 
@@ -354,18 +355,19 @@ get_ry(void)
 	return ctab->w->y + ctab->w->row - ctab->w->rowoff;
 }
 
-void
+int
 get_sel_area(int *beg, int *end)
 {
 	int b = SEL_MARKER.col, e = ctab->w->col;
 	if (!has_sel) {
 		*beg = *end = 0;
-		return;
+		return 0;
 	}
 	if (b > e)
 		xor_swap(b, e);
 	*beg = b;
 	*end = e;
+	return 1;
 }
 
 void
@@ -748,10 +750,15 @@ delete(const union arg *arg)
 	int pos, len, t;
 
 	if (arg->i == 0) {
-		if (!has_sel)
+		if (has_sel) {
+			get_sel_area(&pos, &t);
+			len = t - pos;
+		} else if (ctab->w->col < (int)ctab->w->l->s.len - 1) {
+			pos = ctab->w->col;
+			len = 1;
+		} else {
 			return;
-		get_sel_area(&pos, &t);
-		len = t - pos;
+		}
 	} else {
 		pos = ctab->w->col - arg->i;
 		len = arg->i;
@@ -778,12 +785,12 @@ delete(const union arg *arg)
 		return;
 	}
 
-	if (arg->i == 0)
+	if (arg->i == 0 && has_sel)
 		dup_to_reg('+', l->s.s + pos, len);
 	estr_remove(&l->s, pos, len);
 	refreshl(l);
 	refreshw(ctab->w);
-	move_col(&ARG(.i = -len));
+	move_col(&ARG(.i = arg->i == 0 ? 0 : -len));
 }
 
 void
@@ -987,6 +994,18 @@ sel_word(const union arg *arg)
 
 	has_sel = l;
 	refreshw(ctab->w);
+}
+
+void
+yank(const union arg *arg)
+{
+	struct line *l = ctab->w->l;
+	int beg, end;
+
+	if (!get_sel_area(&beg, &end))
+		return;
+
+	dup_to_reg(arg->i, l->s.s + beg, end - beg);
 }
 
 /* command functions */
