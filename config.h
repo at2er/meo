@@ -43,6 +43,7 @@ static const struct key normal_keys[] = {
 	{"O",    new_line,    {.i = UP}          },
 	{"p",    paste,       {.i = '+'}         },
 	{"q",    quit,        {0}                },
+	{"v",    sel,         {0}                },
 	{"w",    sel_word,    {.i = 1}           },
 	{"y",    yank,        {.i = '+'}         },
 	{"'",    goto_mark,   {0}                },
@@ -56,20 +57,21 @@ static const struct key normal_keys[] = {
 static const struct key insert_keys[] = {
 	/* key   func         arg               */
 	{"jk",   mode,        {.i = MODE_NOR}    },
-	{"/b",   delete,      {.i = 1}           },
+	{"/b",   backspace,   {.i = 1}           },
 	{"/e",   mode,        {.i = MODE_NOR}    },
 	{"/r",   insert,      {.s = "\n"}        },
-	{"^h",   delete,      {.i = 1}           },
+	{"^h",   backspace,   {.i = 1}           },
 	{NULL,   NULL,        {0}                }
 };
 
 /* search mode also use this bindings */
 static const struct key cmd_keys[] = {
 	/* key   func         arg               */
-	{"/b",   delete,      {.i = 1}           },
+	{"/b",   backspace,   {.i = 1}           },
 	{"/c",   mode,        {.i = MODE_NOR}    },
 	{"/e",   mode,        {.i = MODE_NOR}    },
 	{"/r",   cmd,         {0}                },
+	{"^h",   backspace,   {.i = 1}           },
 	{NULL,   NULL,        {0}                }
 };
 

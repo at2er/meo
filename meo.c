@@ -26,7 +26,6 @@
 
 #define ARG(...) (union arg){__VA_ARGS__}
 #define lineof(LINK) list_container_of(LINK, struct line, link)
-#define refreshl(LREF) (*(LREF)->r = 0)
 #define refreshw(WREF) ((WREF)->refresh = 1)
 
 static void comp_pattern(const char *p, int len);
@@ -46,13 +45,14 @@ static struct marker *get_marker(int k);
 static char **get_reg(int k);
 static void get_rowcol(struct marker *m);
 static int get_rx(int col);
-static int get_ry(void);
+static int get_ry(int row);
 static int get_sel_area(int *beg, int *end);
 static void init(void);
 static void jumping(void);
 static void keypress(int k);
 static int match(const char *str);
 static int mode_can_insert(void);
+static void refreshl(struct win *w, struct line *l);
 static void render_line(const struct win *w, struct line *l);
 static int request_key(void);
 static void ruler(void);
@@ -174,7 +174,7 @@ draw(void)
 	draw_win(&bar);
 
 	draw_sel();
-	sctui_move(get_rx(ctab->w->col), get_ry());
+	sctui_move(get_rx(ctab->w->col), get_ry(ctab->w->row));
 
 	sctui_commit();
 }
@@ -182,24 +182,38 @@ draw(void)
 void
 draw_sel(void)
 {
-	const char *tmp;
-	int beg, to;
-	char buf[256], *p;
+	int beg, to, rx, ry;
+	char *p;
+	struct line *l = SEL_MARKER.l;
 
 	if (!get_sel_area(&beg, &to))
 		return;
-
-	tmp = sctui_attr_on(sel_attr);
 	beg = get_rx(beg);
 	to = get_rx(to);
 
-	p = buf;
-	p += sprintf(p, tmp);
-	p += sprintf(p, "%.*s", to - beg, has_sel->r + beg - ctab->w->x);
+	sctui_out(sctui_attr_on(sel_attr), 0);
 
-	sctui_text(beg, get_ry(), buf, p - buf);
-	tmp = sctui_attr_off();
-	sctui_out(tmp, strlen(tmp));
+	p = sbuf;
+	p += sprintf(p, "%.*s", to - beg, ctab->w->l->r + beg);
+
+	rx = get_rx(SEL_MARKER.col);
+	ry = get_ry(SEL_MARKER.row);
+
+	for (int i = SEL_MARKER.row, len; i < ctab->w->row; i++, ry++) {
+		len = get_rx(l->s.len) - rx;
+		sctui_text(rx, ry, l->r + rx,
+				len > ctab->w->w ? ctab->w->w : len);
+		l = lineof(l->link.nex);
+		rx = 0;
+	}
+	for (int i = SEL_MARKER.row, len = rx; i > ctab->w->row; i--, ry--) {
+		sctui_text(0, ry, l->r, len);
+		l = lineof(l->link.prv);
+		len = get_rx(l->s.len);
+	}
+
+	sctui_text(beg, ry, sbuf, p - sbuf);
+	sctui_out(sctui_attr_off(), 0);
 }
 
 void
@@ -253,7 +267,6 @@ empty_line(void)
 {
 	struct line *l = ecalloc(1, sizeof(*l));
 	estr_from_cstr(&l->s, "\n");
-	refreshl(l);
 	return l;
 }
 
@@ -379,26 +392,38 @@ get_rx(int col)
 }
 
 int
-get_ry(void)
+get_ry(int row)
 {
-	return ctab->w->y + ctab->w->row - ctab->w->rowoff;
+	return ctab->w->y + row - ctab->w->rowoff;
 }
 
 int
 get_sel_area(int *beg, int *end)
 {
-	int r = 1, b = SEL_MARKER.col, e = ctab->w->col;
+	int b = SEL_MARKER.col, e = ctab->w->col;
 	if (!has_sel) {
 		*beg = *end = 0;
 		return 0;
 	}
-	if (b > e) {
-		xor_swap(b, e);
-		r = 2;
+
+	if (SEL_MARKER.row > ctab->w->row) {
+		*beg = ctab->w->col;
+		*end = ctab->w->l->s.len;
+		return 1;
+	} else if (SEL_MARKER.row < ctab->w->row) {
+		*beg = 0;
+		*end = ctab->w->col;
+		return 1;
 	}
+
 	*beg = b;
 	*end = e;
-	return r;
+
+	if (b > e) {
+		xor_swap(*beg, *end);
+		return 2;
+	}
+	return 1;
 }
 
 void
@@ -537,9 +562,8 @@ new_line(const union arg *arg)
 	move_row(&ARG(.i = (arg->i & 1)));
 
 	if (prv)
-		refreshl(prv);
-	refreshl(l);
-	refreshw(ctab->w);
+		refreshl(ctab->w, prv);
+	refreshl(ctab->w, l);
 }
 
 void
@@ -550,6 +574,13 @@ paste(const union arg *arg)
 		return;
 	move_col(&ARG(.i = 1));
 	insert(&ARG(.s = *reg));
+}
+
+void
+refreshl(struct win *w, struct line *l)
+{
+	*l->r = 0;
+	refreshw(w);
 }
 
 void
@@ -624,8 +655,7 @@ ruler(void)
 
 	estr_append_cstr(&l->s, sbuf);
 
-	refreshl(l);
-	refreshw(&bar);
+	refreshl(&bar, l);
 }
 
 int
@@ -811,8 +841,21 @@ concat_line(const union arg *arg)
 	str_free(&l->s);
 	free(l);
 
-	refreshl(prv);
-	refreshw(ctab->w);
+	refreshl(ctab->w, prv);
+}
+
+void
+backspace(const union arg *arg)
+{
+	struct line *l = ctab->w->l;
+	int pos = ctab->w->col - arg->i;
+	if (pos < 0) {
+		concat_line(&ARG(.i = -1));
+		return;
+	}
+	estr_remove(&l->s, pos, arg->i);
+	refreshl(ctab->w, l);
+	move_col(&ARG(.i = -arg->i));
 }
 
 void
@@ -838,8 +881,7 @@ cmd(const union arg *arg)
 		bar.l->s.s[0] = '\n';
 		bar.l->s.s[1] = '\0';
 		bar.l->s.len = 1;
-		refreshl(bar.l);
-		refreshw(&bar);
+		refreshl(&bar, bar.l);
 	}
 
 	mode(&ARG(.i = MODE_NOR));
@@ -879,38 +921,28 @@ void
 delete(const union arg *arg)
 {
 	struct line *l = ctab->w->l;
-	int pos, len, t;
+	int pos, len;
 
-	if (arg->i == 0) {
-		if (has_sel) {
-			if (get_sel_area(&pos, &t) == 2)
-				has_sel = NULL;
-			len = t - pos;
-		} else {
-			pos = ctab->w->col;
-			len = 1;
-			if (pos >= (int)ctab->w->l->s.len - 1) {
-				concat_line(&ARG(0));
-				return;
-			}
-		}
-	} else {
-		pos = ctab->w->col - arg->i;
-		len = arg->i;
-	}
-
-	if (pos < 0) {
-		concat_line(&ARG(.i = -1));
+	if (!has_sel) {
+		pos = ctab->w->col;
+		len = 1;
+		if (pos >= (int)ctab->w->l->s.len - 1)
+			concat_line(&ARG(0));
+		else
+			estr_remove(&l->s, pos, len);
+		refreshl(ctab->w, l);
 		return;
 	}
 
-	if (arg->i == 0 && has_sel)
-		dup_to_reg('+', l->s.s + pos, len);
+	if (get_sel_area(&pos, &len) == 2)
+		has_sel = NULL;
+	len -= pos;
+
+	dup_to_reg('+', l->s.s + pos, len);
 	estr_remove(&l->s, pos, len);
-	refreshl(l);
-	refreshw(ctab->w);
-	if (!(arg->i == 0 && !has_sel))
-		move_col(&ARG(.i = -len));
+	refreshl(ctab->w, l);
+	move_col(&ARG(.i = -len));
+	has_sel = NULL;
 }
 
 void
@@ -982,8 +1014,7 @@ insert(const union arg *arg)
 		ctab->w->col++;
 	}
 
-	refreshl(l);
-	refreshw(ctab->w);
+	refreshl(ctab->w, l);
 
 	estr_insert_str(&l->s, ctab->w->col - s.len, &s);
 	set_col(ctab->w, ctab->w->col);
@@ -1079,6 +1110,12 @@ search(const union arg *arg)
 
 	set_rowcol(&orig);
 	has_sel = NULL;
+}
+
+void
+sel(const union arg *arg)
+{
+	has_sel = SEL_MARKER.l;
 }
 
 void
@@ -1181,7 +1218,6 @@ cmd_edit(int argc, const char *argv[])
 	for (nline = 0; fgets(sbuf, BUFSIZ, fp); nline++) {
 		l = ecalloc(1, sizeof(*l));
 		estr_from_cstr(&l->s, sbuf);
-		refreshl(l);
 		list_insert(&fb->lines, fb->lines.end, &l->link);
 	}
 	fb->nline = nline;

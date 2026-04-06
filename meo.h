@@ -56,6 +56,7 @@ struct win {
 };
 
 /* key functions */
+static void backspace(const union arg *arg);
 static void change(const union arg *arg);
 static void cmd(const union arg *arg);
 static void concat_line(const union arg *arg);
@@ -72,6 +73,7 @@ static void new_line(const union arg *arg);
 static void paste(const union arg *arg);
 static void quit(const union arg *arg);
 static void search(const union arg *arg);
+static void sel(const union arg *arg);
 static void sel_line(const union arg *arg);
 static void sel_word(const union arg *arg);
 static void yank(const union arg *arg);
