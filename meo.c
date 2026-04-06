@@ -1082,6 +1082,20 @@ search(const union arg *arg)
 }
 
 void
+sel_line(const union arg *arg)
+{
+	if (arg->i > 0) {
+		set_col(ctab->w, 0);
+		jumping();
+		set_col(ctab->w, ctab->w->l->s.len - 1);
+	} else {
+		set_col(ctab->w, ctab->w->l->s.len - 1);
+		jumping();
+		set_col(ctab->w, 0);
+	}
+}
+
+void
 sel_word(const union arg *arg)
 {
 	const char *beg, *end;

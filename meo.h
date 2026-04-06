@@ -72,6 +72,7 @@ static void new_line(const union arg *arg);
 static void paste(const union arg *arg);
 static void quit(const union arg *arg);
 static void search(const union arg *arg);
+static void sel_line(const union arg *arg);
 static void sel_word(const union arg *arg);
 static void yank(const union arg *arg);
 
