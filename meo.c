@@ -24,6 +24,21 @@
 
 #define MAX_MACHES 1
 
+/* inside the selection, other line must handle by hand */
+#define for_each_sel(LINE, ROW, NEX, TMP) \
+	do { \
+		(LINE) = ctab->w->row > SEL_MARKER.row \
+				? SEL_MARKER.l : ctab->w->l; \
+		(LINE) = lineof((LINE)->link.nex); \
+		(NEX) = lineof((LINE)->link.nex); \
+		for (int ROW = MIN(ctab->w->row, SEL_MARKER.row) + 1, \
+				TMP = MAX(ctab->w->row, SEL_MARKER.row); \
+				(LINE) && ROW < TMP; \
+				ROW++, (LINE) = (NEX), \
+				(NEX) = lineof((LINE)->link.nex))
+#define for_each_sel_end \
+	} while (0);
+
 #define ARG(...) (union arg){__VA_ARGS__}
 #define lineof(LINK) list_container_of(LINK, struct line, link)
 #define refreshw(WREF) ((WREF)->refresh = 1)
@@ -39,20 +54,21 @@ static struct line *empty_line(void);
 static void fini(void);
 static void get_draw_line(struct win *w);
 static const struct key *get_keys_table(void);
-static void get_line_nex(struct win *w, int step);
-static void get_line_prv(struct win *w, int step);
+static struct line *get_line_nex(struct line *beg, int step);
+static struct line *get_line_prv(struct line *beg, int step);
 static struct marker *get_marker(int k);
 static char **get_reg(int k);
 static void get_rowcol(struct marker *m);
-static int get_rx(int col);
+static int get_rx(struct line *l, int col);
 static int get_ry(int row);
-static int get_sel_area(int *beg, int *end);
+static int get_sel_area(int *beg, int *end, int *beg2, int *end2);
 static void init(void);
 static void jumping(void);
 static void keypress(int k);
 static int match(const char *str);
 static int mode_can_insert(void);
 static void refreshl(struct win *w, struct line *l);
+static void remove_line(struct fbuf *fb, struct line *l);
 static void render_line(const struct win *w, struct line *l);
 static int request_key(void);
 static void ruler(void);
@@ -174,7 +190,8 @@ draw(void)
 	draw_win(&bar);
 
 	draw_sel();
-	sctui_move(get_rx(ctab->w->col), get_ry(ctab->w->row));
+	sctui_move(get_rx(ctab->w->l, ctab->w->col),
+			get_ry(ctab->w->row));
 
 	sctui_commit();
 }
@@ -182,37 +199,32 @@ draw(void)
 void
 draw_sel(void)
 {
-	int beg, to, rx, ry;
-	char *p;
-	struct line *l = SEL_MARKER.l;
+	int beg, end, beg2, end2;
+	int rx, ry, len;
+	struct line *l, *nex;
 
-	if (!get_sel_area(&beg, &to))
+	if (!get_sel_area(&beg, &end, &beg2, &end2))
 		return;
-	beg = get_rx(beg);
-	to = get_rx(to);
 
 	sctui_out(sctui_attr_on(sel_attr), 0);
 
-	p = sbuf;
-	p += sprintf(p, "%.*s", to - beg, ctab->w->l->r + beg);
+	rx = get_rx(ctab->w->l, beg);
+	len = get_rx(ctab->w->l, end) - rx;
+	sctui_text(rx, get_ry(ctab->w->row), ctab->w->l->r + rx,
+			MIN(len, ctab->w->w));
 
-	rx = get_rx(SEL_MARKER.col);
-	ry = get_ry(SEL_MARKER.row);
+	rx = get_rx(SEL_MARKER.l, beg2);
+	len = get_rx(SEL_MARKER.l, end2) - rx;
+	sctui_text(rx, get_ry(SEL_MARKER.row), SEL_MARKER.l->r + rx,
+			MIN(len, ctab->w->w));
 
-	for (int i = SEL_MARKER.row, len; i < ctab->w->row; i++, ry++) {
-		len = get_rx(l->s.len) - rx;
-		sctui_text(rx, ry, l->r + rx,
-				len > ctab->w->w ? ctab->w->w : len);
-		l = lineof(l->link.nex);
-		rx = 0;
-	}
-	for (int i = SEL_MARKER.row, len = rx; i > ctab->w->row; i--, ry--) {
-		sctui_text(0, ry, l->r, len);
-		l = lineof(l->link.prv);
-		len = get_rx(l->s.len);
-	}
+	ry = get_ry(MIN(ctab->w->row, SEL_MARKER.row) + 1);
+	for_each_sel(l, row, nex, tmp) {
+		len = get_rx(l, l->s.len);
+		sctui_text(0, ry, l->r, MIN(len, ctab->w->w));
+		ry++;
+	} for_each_sel_end;
 
-	sctui_text(beg, ry, sbuf, p - sbuf);
 	sctui_out(sctui_attr_off(), 0);
 }
 
@@ -312,28 +324,26 @@ get_keys_table(void)
 	return NULL;
 }
 
-void
-get_line_nex(struct win *w, int step)
+struct line *
+get_line_nex(struct line *beg, int step)
 {
-	list_for_each(struct line, l, &w->l->link, tmp, link) {
-		if (step <= 0) {
-			w->l = l;
-			break;
-		}
+	list_for_each(struct line, l, &beg->link, tmp, link) {
+		if (step <= 0)
+			return l;
 		step--;
 	}
+	return NULL;
 }
 
-void
-get_line_prv(struct win *w, int step)
+struct line *
+get_line_prv(struct line *beg, int step)
 {
-	list_for_each_prv(struct line, l, &w->l->link, tmp, link) {
-		if (step <= 0) {
-			w->l = l;
-			break;
-		}
+	list_for_each_prv(struct line, l, &beg->link, tmp, link) {
+		if (step <= 0)
+			return l;
 		step--;
 	}
+	return NULL;
 }
 
 struct marker *
@@ -375,7 +385,7 @@ get_rowcol(struct marker *m)
 }
 
 int
-get_rx(int col)
+get_rx(struct line *l, int col)
 {
 	int rx = 0;
 	for (int i = 0; i < col; i++) {
@@ -398,9 +408,8 @@ get_ry(int row)
 }
 
 int
-get_sel_area(int *beg, int *end)
+get_sel_area(int *beg, int *end, int *beg2, int *end2)
 {
-	int b = SEL_MARKER.col, e = ctab->w->col;
 	if (!has_sel) {
 		*beg = *end = 0;
 		return 0;
@@ -409,20 +418,24 @@ get_sel_area(int *beg, int *end)
 	if (SEL_MARKER.row > ctab->w->row) {
 		*beg = ctab->w->col;
 		*end = ctab->w->l->s.len;
-		return 1;
+		*beg2 = 0;
+		*end2 = SEL_MARKER.col + 1;
 	} else if (SEL_MARKER.row < ctab->w->row) {
 		*beg = 0;
 		*end = ctab->w->col;
-		return 1;
+		*beg2 = SEL_MARKER.col;
+		*end2 = SEL_MARKER.l->s.len;
+	} else {
+		*beg = SEL_MARKER.col;
+		*end = ctab->w->col;
+		if (*beg > *end)
+			xor_swap(*beg, *end);
+		*beg2 = *beg;
+		*end2 = *end;
+		if (*beg == *end)
+			return 0;
 	}
 
-	*beg = b;
-	*end = e;
-
-	if (b > e) {
-		xor_swap(*beg, *end);
-		return 2;
-	}
 	return 1;
 }
 
@@ -539,6 +552,8 @@ new_line(const union arg *arg)
 	struct line *l, *prv = ctab->w->l;
 	struct str s;
 
+	ctab->w->fb->ldirty = 1;
+
 	l = ecalloc(1, sizeof(*l));
 	if (!(arg->i & 1))
 		prv = lineof(prv->link.prv);
@@ -581,6 +596,15 @@ refreshl(struct win *w, struct line *l)
 {
 	*l->r = 0;
 	refreshw(w);
+}
+
+void
+remove_line(struct fbuf *fb, struct line *l)
+{
+	fb->ldirty = 1;
+	list_remove(&fb->lines, &l->link);
+	str_free(&l->s);
+	free(l);
 }
 
 void
@@ -793,12 +817,11 @@ set_row(struct win *w, int row)
 		w->l = lineof(w->fb->lines.beg);
 	} else if (w->row == w->fb->nline - 1) {
 		w->l = lineof(w->fb->lines.end);
+	} else if (w->row > orig) {
+		w->l = get_line_nex(w->l, w->row - orig);
+	} else if (w->row < orig) {
+		w->l = get_line_prv(w->l, orig - w->row);
 	}
-
-	if (w->row > orig)
-		get_line_nex(w, w->row - orig);
-	else if (w->row < orig)
-		get_line_prv(w, orig - w->row);
 	get_draw_line(w);
 
 	set_col(w, w->col);
@@ -808,7 +831,10 @@ void
 set_rowcol(struct marker *m)
 {
 	ctab->w->fb = m->fb;
+	if (ctab->w->fb->ldirty)
+		m->l = get_line_nex(lineof(m->fb->lines.beg), m->row);
 	ctab->w->l = m->l;
+	ctab->w->row = m->row;
 	ctab->w->rowoff = m->rowoff;
 	set_row(ctab->w, m->row);
 	set_col(ctab->w, m->col);
@@ -819,6 +845,8 @@ void
 concat_line(const union arg *arg)
 {
 	struct line *l = ctab->w->l, *prv;
+
+	ctab->w->fb->ldirty = 1;
 
 	if (arg->i == -1) {
 		prv = lineof(l->link.prv);
@@ -920,28 +948,50 @@ end:
 void
 delete(const union arg *arg)
 {
-	struct line *l = ctab->w->l;
-	int pos, len;
+	struct str buf;
+	struct line *l = ctab->w->l, *nex;
+	int beg, end, beg2, end2;
+	int to_row, to_col;
 
-	if (!has_sel) {
-		pos = ctab->w->col;
-		len = 1;
-		if (pos >= (int)ctab->w->l->s.len - 1)
+	if (!get_sel_area(&beg, &end, &beg2, &end2)) {
+		if (ctab->w->col >= (int)ctab->w->l->s.len - 1)
 			concat_line(&ARG(0));
 		else
-			estr_remove(&l->s, pos, len);
+			estr_remove(&l->s, ctab->w->col, 1);
 		refreshl(ctab->w, l);
 		return;
 	}
 
-	if (get_sel_area(&pos, &len) == 2)
-		has_sel = NULL;
-	len -= pos;
+	str_empty(&buf);
 
-	dup_to_reg('+', l->s.s + pos, len);
-	estr_remove(&l->s, pos, len);
-	refreshl(ctab->w, l);
-	move_col(&ARG(.i = -len));
+	for_each_sel(l, row, nex, tmp) {
+		remove_line(ctab->w->fb, l);
+	} for_each_sel_end;
+
+	l = ctab->w->l;
+	estr_remove(&l->s, beg, end - beg);
+	refreshl(ctab->w, ctab->w->l);
+
+	if (SEL_MARKER.row != ctab->w->row) {
+		estr_remove(&SEL_MARKER.l->s, beg2, end2 - beg2);
+		refreshl(ctab->w, SEL_MARKER.l);
+	}
+
+	to_row = ctab->w->row;
+	to_col = beg;
+	if (SEL_MARKER.row < ctab->w->row) {
+		estr_append_str(&SEL_MARKER.l->s, &l->s);
+		remove_line(ctab->w->fb, l);
+		to_row = SEL_MARKER.row;
+		to_col = beg2;
+	} else if (SEL_MARKER.row > ctab->w->row) {
+		estr_append_str(&l->s, &SEL_MARKER.l->s);
+		remove_line(ctab->w->fb, SEL_MARKER.l);
+	}
+
+	set_row(ctab->w, to_row);
+	set_col(ctab->w, to_col);
+
 	has_sel = NULL;
 }
 
@@ -1135,7 +1185,7 @@ sel_line(const union arg *arg)
 void
 sel_word(const union arg *arg)
 {
-	const char *beg, *end;
+	const char *beg, *end, *t;
 	struct marker fake;
 	struct line *l;
 
@@ -1159,7 +1209,7 @@ sel_word(const union arg *arg)
 	refreshw(ctab->w);
 
 	if (beg > end) {
-		const char *t = beg;
+		t = beg;
 		beg = end;
 		end = t;
 	}
@@ -1170,13 +1220,13 @@ sel_word(const union arg *arg)
 void
 yank(const union arg *arg)
 {
-	struct line *l = ctab->w->l;
-	int beg, end;
+	// struct line *l = ctab->w->l;
+	// int beg, end;
 
-	if (!get_sel_area(&beg, &end))
-		return;
+	// if (!get_sel_area(&beg, &end))
+	// 	return;
 
-	dup_to_reg(arg->i, l->s.s + beg, end - beg);
+	// dup_to_reg(arg->i, l->s.s + beg, end - beg);
 }
 
 /* command functions */

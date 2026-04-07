@@ -31,6 +31,8 @@ struct fbuf {
 	int nline;
 	char path[FILENAME_MAX];
 
+	int ldirty; /* lines dirty */
+
 	struct marker pos;
 };
 
