@@ -824,6 +824,8 @@ set_row(struct win *w, int row)
 	}
 	get_draw_line(w);
 
+	w->fb->pos.l = w->l;
+
 	set_col(w, w->col);
 }
 
@@ -831,7 +833,7 @@ void
 set_rowcol(struct marker *m)
 {
 	ctab->w->fb = m->fb;
-	if (ctab->w->fb->ldirty)
+	if (ctab->w->fb->ldirty || !m->l)
 		m->l = get_line_nex(lineof(m->fb->lines.beg), m->row);
 	ctab->w->l = m->l;
 	ctab->w->row = m->row;
@@ -1274,11 +1276,8 @@ cmd_edit(int argc, const char *argv[])
 
 	fclose(fp);
 setwin:
-	set_rowcol(&(struct marker){
-			fb, lineof(fb->lines.beg),
-			fb->pos.row,
-			fb->pos.rowoff,
-			fb->pos.col});
+	fb->pos.fb = fb;
+	set_rowcol(&fb->pos);
 }
 
 void
