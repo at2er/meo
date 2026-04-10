@@ -20,6 +20,11 @@ struct cmd {
 	void (*func)(int argc, const char *argv[]);
 };
 
+struct cursor {
+	int row, col, len;
+	struct line *l;
+};
+
 struct marker {
 	struct fbuf *fb;
 	struct line *l;

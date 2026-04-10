@@ -93,12 +93,12 @@ static struct option opts[] = {
 	OPT_END
 };
 
-static struct fbuf *fbs;
-static struct tab *tabs;
-static struct win *wins;
-static int         nfb;
-static int         ntab;
-static int         nwin;
+typedef darr(struct fbuf) fb_arr;
+typedef darr(struct tab) tab_arr;
+typedef darr(struct win) win_arr;
+static fb_arr  fbs;
+static tab_arr tabs;
+static win_arr wins;
 
 static struct win bar;
 static struct win *cmdback;
@@ -109,6 +109,9 @@ static struct fbuf rulerbuf;
 static char *regs[1];
 
 /* state */
+typedef darr(struct cursor) cursor_arr;
+static cursor_arr cursors;
+
 static int         cmode = MODE_NOR;
 static struct tab *ctab;
 
@@ -183,8 +186,8 @@ copy(const char *s)
 void
 draw(void)
 {
-	for (int i = 0; i < nwin; i++)
-		draw_win(&wins[i]);
+	for (int i = 0; i < wins.n; i++)
+		draw_win(&wins.elems[i]);
 
 	ruler();
 	draw_win(&bar);
@@ -443,17 +446,19 @@ void
 init(void)
 {
 	struct line *l;
+
 	sctui_init();
 	fds[0].fd = STDIN_FILENO;
 	fds[0].events = POLLIN;
 
-	nwin = 1;
-	wins = erealloc(wins, sizeof(*wins) * nwin);
+	darr_init(&wins);
+	darr_expand(&wins)
+	darr_init(&tabs);
+	darr_expand(&tabs)
+	darr_init(&cursors);
 
-	ntab = 1;
-	tabs = erealloc(tabs, sizeof(*tabs) * ntab);
-	ctab = tabs;
-	ctab->w = wins;
+	ctab = tabs.elems;
+	ctab->w = wins.elems;
 	ctab->w->w = global_sctui.w;
 	ctab->w->h = global_sctui.h - 1;
 
@@ -898,9 +903,11 @@ change(const union arg *arg)
 void
 cmd(const union arg *arg)
 {
-	int argc = 0, m = cmode;
-	char **argv = NULL;
+	int m = cmode;
 	char *tok, *dup, *saver;
+
+	darr(char*) args;
+	darr_init(&args);
 
 	if (arg->s) {
 		dup = strdup(arg->s);
@@ -921,10 +928,10 @@ cmd(const union arg *arg)
 		for (tok = dup; ; tok = NULL) {
 			if (!(tok = strtok_r(tok, " \t\n", &saver)))
 				break;
-			darr_append(argv, argc, tok);
+			darr_append(&args, tok);
 		}
-		darr_append(argv, argc, NULL);
-		argc--;
+		darr_append(&args, NULL);
+		args.n--;
 		break;
 	case MODE_SEARCH:
 		comp_pattern(dup, 0);
@@ -932,13 +939,13 @@ cmd(const union arg *arg)
 		break;
 	}
 
-	if (!argc || !argv[0])
+	if (!args.n || !args.elems[0])
 		goto end;
 
 	for (int i = 0; cmds[i].cmd != NULL; i++) {
-		if (strcmp(cmds[i].cmd, argv[0]) == 0 ||
-		    strcmp(cmds[i].alias, argv[0]) == 0) {
-			cmds[i].func(argc, (const char**)argv);
+		if (strcmp(cmds[i].cmd, args.elems[0]) == 0 ||
+		    strcmp(cmds[i].alias, args.elems[0]) == 0) {
+			cmds[i].func(args.n, (const char**)args.elems);
 			break;
 		}
 	}
@@ -1241,17 +1248,16 @@ cmd_edit(int argc, const char *argv[])
 	int nline;
 
 	if (argc > 1 && argv) {
-		for (int i = 0; i < nfb; i++) {
-			if (strcmp(fbs[i].path, argv[1]) == 0) {
-				fb = &fbs[i];
+		for (int i = 0; i < fbs.n; i++) {
+			if (strcmp(fbs.elems[i].path, argv[1]) == 0) {
+				fb = &fbs.elems[i];
 				goto setwin;
 			}
 		}
 	}
 
-	nfb++;
-	fbs = erealloc(fbs, sizeof(*fbs) * nfb);
-	fb = &fbs[nfb - 1];
+	darr_expand(&fbs);
+	fb = &fbs.elems[fbs.n - 1];
 	memset(fb, 0, sizeof(*fb));
 
 	list_init(&fb->lines);

@@ -1,29 +1,41 @@
 /* Public domain
  *
- * Just a dynamic array.
- *
- * Usage:
- *     // 'T' is your the type of element of the dynamic array.
- *     darr_append(T self, size_t count, T elem);
- *     darr_expand(T self, size_t count);
- *
- *     'darr_append' and 'darr_expand' is similar and will both use 'realloc' to
- *     expand the dynamic array.
- */
+ * Just a dynamic array. */
 #ifndef UTILSH_DARR_H
 #define UTILSH_DARR_H
-#include <stdlib.h>
+#include <stddef.h>
 
-#define darr_append(SELF, COUNT, ELEM) \
+#ifndef UTILSH_DARR_REALLOC
+#define UTILSH_DARR_REALLOC realloc
+#include <stdlib.h>
+#endif
+
+#define darr(TYPE) \
+	struct { \
+		TYPE *elems; \
+		int n; \
+	}
+
+#define darr_append(DARR, ELEM) \
 	do { \
-		darr_expand((SELF), (COUNT)); \
-		(SELF)[(COUNT) - 1] = (ELEM); \
+		darr_expand(DARR); \
+		(DARR)->elems[(DARR)->n - 1] = (ELEM); \
 	} while (0)
 
-#define darr_expand(SELF, COUNT) \
+#define darr_expand(DARR) \
+	darr_resize((DARR), (DARR)->n + 1);
+
+#define darr_init(DARR) \
 	do { \
-		(COUNT)++; \
-		(SELF) = realloc((SELF), (COUNT) * sizeof(*(SELF))); \
+		(DARR)->n = 0; \
+		(DARR)->elems = NULL; \
+	} while (0)
+
+#define darr_resize(DARR, N) \
+	do { \
+		(DARR)->n = (N); \
+		(DARR)->elems = UTILSH_DARR_REALLOC((DARR)->elems, \
+				(DARR)->n * sizeof(*(DARR)->elems)); \
 	} while (0)
 
 #endif
