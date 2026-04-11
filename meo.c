@@ -14,6 +14,7 @@
 #include <unistd.h>
 
 #define UTILSH_LIST_STRIP
+#define UTILSH_DARR_REALLOC erealloc
 #include "darr.h"
 #include "getarg.h"
 #include "list.h"
@@ -27,14 +28,14 @@
 /* inside the selection, other line must handle by hand */
 #define for_each_sel(LINE, ROW, NEX, TMP) \
 	do { \
-		(LINE) = ctab->w->row > SEL_MARKER.row \
-				? SEL_MARKER.l : ctab->w->l; \
+		(LINE) = ctab->w->p.row > SEL_MARKER.row \
+				? SEL_MARKER.l : ctab->w->p.l; \
 		(LINE) = lineof((LINE)->link.nex); \
 		if (!(LINE)) \
 			break; \
 		(NEX) = lineof((LINE)->link.nex); \
-		for (int ROW = MIN(ctab->w->row, SEL_MARKER.row) + 1, \
-				TMP = MAX(ctab->w->row, SEL_MARKER.row); \
+		for (int ROW = MIN(ctab->w->p.row, SEL_MARKER.row) + 1, \
+				TMP = MAX(ctab->w->p.row, SEL_MARKER.row); \
 				(LINE) && ROW < TMP; \
 				ROW++, (LINE) = (NEX), \
 				(NEX) = lineof((LINE)->link.nex))
@@ -65,7 +66,8 @@ static int get_rx(struct line *l, int col);
 static int get_ry(int row);
 static int get_sel_area(int *beg, int *end, int *beg2, int *end2);
 static void init(void);
-static void jumping(void);
+static void jump_done(void);
+static void jump_start(void);
 static void keypress(int k);
 static int match(const char *str);
 static int mode_can_insert(void);
@@ -112,6 +114,7 @@ static char *regs[1];
 
 /* state */
 typedef darr(struct cursor) cursor_arr;
+static int        cursor;
 static cursor_arr cursors;
 
 static int         cmode = MODE_NOR;
@@ -189,14 +192,15 @@ void
 draw(void)
 {
 	for (int i = 0; i < wins.n; i++)
-		draw_win(&wins.elems[i]);
+		draw_win(&wins.e[i]);
 
 	ruler();
 	draw_win(&bar);
 
-	draw_sel();
-	sctui_move(get_rx(ctab->w->l, ctab->w->col),
-			get_ry(ctab->w->row));
+	if (has_sel)
+		draw_sel();
+	sctui_move(get_rx(ctab->w->p.l, ctab->w->p.col),
+			get_ry(ctab->w->p.row));
 
 	sctui_commit();
 }
@@ -204,31 +208,18 @@ draw(void)
 void
 draw_sel(void)
 {
-	int beg, end, beg2, end2;
 	int rx, ry, len;
-	struct line *l, *nex;
-
-	if (!get_sel_area(&beg, &end, &beg2, &end2))
-		return;
 
 	sctui_out(sctui_attr_on(sel_attr), 0);
 
-	rx = get_rx(ctab->w->l, beg);
-	len = get_rx(ctab->w->l, end) - rx;
-	sctui_text(rx, get_ry(ctab->w->row), ctab->w->l->r + rx,
-			MIN(len, ctab->w->w));
-
-	rx = get_rx(SEL_MARKER.l, beg2);
-	len = get_rx(SEL_MARKER.l, end2) - rx;
-	sctui_text(rx, get_ry(SEL_MARKER.row), SEL_MARKER.l->r + rx,
-			MIN(len, ctab->w->w));
-
-	ry = get_ry(MIN(ctab->w->row, SEL_MARKER.row) + 1);
-	for_each_sel(l, row, nex, tmp) {
-		len = get_rx(l, l->s.len);
-		sctui_text(0, ry, l->r, MIN(len, ctab->w->w));
-		ry++;
-	} for_each_sel_end;
+	for (int i = 0; i < cursors.n; i++) {
+		if (!cursors.e[i].l || !cursors.e[i].sel)
+			continue;
+		rx = get_rx(cursors.e[i].l, cursors.e[i].col);
+		ry = get_ry(cursors.e[i].row);
+		len = get_rx(cursors.e[i].l, cursors.e[i].col + cursors.e[i].sel) - rx;
+		sctui_text(rx, ry, cursors.e[i].l->r + rx, MIN(len, ctab->w->w));
+	}
 
 	sctui_out(sctui_attr_off(), 0);
 }
@@ -296,13 +287,13 @@ fini(void)
 void
 get_draw_line(struct win *w)
 {
-	int i = 0, c = w->row - w->rowoff;
-	if (w->row == w->rowoff) {
-		w->draw = w->l;
+	int i = 0, c = w->p.row - w->p.rowoff;
+	if (w->p.row == w->p.rowoff) {
+		w->draw = w->p.l;
 		return;
 	}
 
-	list_for_each_prv(struct line, l, &w->l->link, tmp, link) {
+	list_for_each_prv(struct line, l, &w->p.l->link, tmp, link) {
 		if (i >= c) {
 			w->draw = l;
 			break;
@@ -382,11 +373,11 @@ get_reg(int k)
 void
 get_rowcol(struct marker *m)
 {
-	m->fb = ctab->w->fb;
-	m->l = ctab->w->l;
-	m->row = ctab->w->row;
-	m->rowoff = ctab->w->rowoff;
-	m->col = ctab->w->col;
+	m->fb = ctab->w->p.fb;
+	m->l = ctab->w->p.l;
+	m->row = ctab->w->p.row;
+	m->rowoff = ctab->w->p.rowoff;
+	m->col = ctab->w->p.col;
 }
 
 int
@@ -394,7 +385,7 @@ get_rx(struct line *l, int col)
 {
 	int rx = 0;
 	for (int i = 0; i < col; i++) {
-		switch (ctab->w->l->s.s[i]) {
+		switch (ctab->w->p.l->s.s[i]) {
 		case '\t':
 			rx += strlen(tab_render);
 			break;
@@ -409,7 +400,7 @@ get_rx(struct line *l, int col)
 int
 get_ry(int row)
 {
-	return ctab->w->y + row - ctab->w->rowoff;
+	return ctab->w->y + row - ctab->w->p.rowoff;
 }
 
 int
@@ -420,19 +411,19 @@ get_sel_area(int *beg, int *end, int *beg2, int *end2)
 		return 0;
 	}
 
-	if (SEL_MARKER.row > ctab->w->row) {
-		*beg = ctab->w->col;
-		*end = ctab->w->l->s.len;
+	if (SEL_MARKER.row > ctab->w->p.row) {
+		*beg = ctab->w->p.col;
+		*end = ctab->w->p.l->s.len;
 		*beg2 = 0;
 		*end2 = SEL_MARKER.col + 1;
-	} else if (SEL_MARKER.row < ctab->w->row) {
+	} else if (SEL_MARKER.row < ctab->w->p.row) {
 		*beg = 0;
-		*end = ctab->w->col;
+		*end = ctab->w->p.col;
 		*beg2 = SEL_MARKER.col;
 		*end2 = SEL_MARKER.l->s.len;
 	} else {
 		*beg = SEL_MARKER.col;
-		*end = ctab->w->col;
+		*end = ctab->w->p.col;
 		if (*beg > *end)
 			xor_swap(*beg, *end);
 		*beg2 = *beg;
@@ -453,14 +444,13 @@ init(void)
 	fds[0].fd = STDIN_FILENO;
 	fds[0].events = POLLIN;
 
-	darr_init(&wins);
-	darr_expand(&wins)
 	darr_init(&tabs);
 	darr_expand(&tabs)
-	darr_init(&cursors);
+	darr_init(&wins);
+	darr_expand(&wins)
 
-	ctab = tabs.elems;
-	ctab->w = wins.elems;
+	ctab = tabs.e;
+	ctab->w = wins.e;
 	ctab->w->w = global_sctui.w;
 	ctab->w->h = global_sctui.h - 1;
 
@@ -477,10 +467,15 @@ init(void)
 	bar.y = global_sctui.h - 1;
 	bar.w = global_sctui.w;
 	bar.h = 1;
-	bar.fb = &rulerbuf;
-	bar.fb->nline = 1;
-	bar.l = bar.draw = lineof(bar.fb->lines.beg);
+	bar.p.fb = &rulerbuf;
+	bar.p.fb->nline = 1;
+	bar.p.l = bar.draw = lineof(bar.p.fb->lines.beg);
 	refreshw(&bar);
+
+	darr_init(&cursors);
+	darr_expand(&cursors);
+	memset(cursors.e, 0, sizeof(*cursors.e));
+	cursor = 0;
 
 	if (!entry)
 		cmd_edit(0, NULL);
@@ -489,10 +484,19 @@ init(void)
 }
 
 void
-jumping(void)
+jump_done(void)
+{
+	cursors.e[cursor].sel = ctab->w->p.col - cursors.e[cursor].col;
+}
+
+void
+jump_start(void)
 {
 	mark(&ARG(.i = '\''));
-	has_sel = ctab->w->l;
+	cursors.e[cursor].row = ctab->w->p.row;
+	cursors.e[cursor].col = ctab->w->p.col;
+	cursors.e[cursor].l = ctab->w->p.l;
+	has_sel = ctab->w->p.l;
 }
 
 void
@@ -535,7 +539,7 @@ match(const char *str)
 		set_col(ctab->w, matches[0].rm_so);
 		get_rowcol(&SEL_MARKER);
 		set_col(ctab->w, matches[0].rm_eo);
-		matched = has_sel = ctab->w->l;
+		matched = has_sel = ctab->w->p.l;
 	}
 
 	return r;
@@ -556,28 +560,28 @@ mode_can_insert(void)
 void
 new_line(const union arg *arg)
 {
-	struct line *l, *prv = ctab->w->l;
+	struct line *l, *prv = ctab->w->p.l;
 	struct str s;
 
-	ctab->w->fb->ldirty = 1;
+	ctab->w->p.fb->ldirty = 1;
 
 	l = ecalloc(1, sizeof(*l));
 	if (!(arg->i & 1))
 		prv = lineof(prv->link.prv);
-	list_insert(&ctab->w->fb->lines,
+	list_insert(&ctab->w->p.fb->lines,
 			prv ? &prv->link : NULL,
 			&l->link);
-	ctab->w->fb->nline++;
+	ctab->w->p.fb->nline++;
 	if (!(arg->i & 1))
-		ctab->w->l = prv;
+		ctab->w->p.l = prv;
 
 	if (arg->i & 1 << 1 && prv) {
-		s.s = prv->s.s + ctab->w->col;
-		s.len = prv->s.len - ctab->w->col;
+		s.s = prv->s.s + ctab->w->p.col;
+		s.len = prv->s.len - ctab->w->p.col;
 		s.siz = s.len + 1;
 		if (s.len > 0)
 			estr_append_str(&l->s, &s);
-		estr_remove(&prv->s, ctab->w->col, s.len - 1);
+		estr_remove(&prv->s, ctab->w->p.col, s.len - 1);
 	} else {
 		estr_from_cstr(&l->s, "\n");
 	}
@@ -671,7 +675,7 @@ ruler(void)
 	if (ctab->w == &bar)
 		return;
 
-	len = snprintf(sbuf, BUFSIZ, "%d,%d", ctab->w->row, ctab->w->col);
+	len = snprintf(sbuf, BUFSIZ, "%d,%d", ctab->w->p.row, ctab->w->p.col);
 
 	padding = global_sctui.w - len - skb_ncombo - 4;
 	if (mode_str[cmode]) {
@@ -695,14 +699,14 @@ int
 search_nex(void)
 {
 	if (matched) {
-		if (ctab->w->row >= ctab->w->fb->nline - 1)
+		if (ctab->w->p.row >= ctab->w->p.fb->nline - 1)
 			return 0;
 		move_row(&ARG(.i = 1));
 	}
 	do {
-		if (match(ctab->w->l->s.s))
+		if (match(ctab->w->p.l->s.s))
 			return 1;
-		if (ctab->w->row >= ctab->w->fb->nline - 1)
+		if (ctab->w->p.row >= ctab->w->p.fb->nline - 1)
 			break;
 		move_row(&ARG(.i = 1));
 	} while (1);
@@ -714,15 +718,15 @@ int
 search_prv(void)
 {
 	if (matched) {
-		if (ctab->w->row <= 0)
+		if (ctab->w->p.row <= 0)
 			return 0;
 		move_row(&ARG(.i = -1));
 	}
 
 	do {
-		if (match(ctab->w->l->s.s))
+		if (match(ctab->w->p.l->s.s))
 			return 1;
-		if (ctab->w->row <= 0)
+		if (ctab->w->p.row <= 0)
 			break;
 		move_row(&ARG(.i = 1));
 	} while (1);
@@ -741,7 +745,7 @@ sel_word_nex(const char **beg, const char **end)
 	while (*e && (isalpha(*e) || *e == '_'))
 		e++;
 	do {
-		if (b == ctab->w->l->s.s)
+		if (b == ctab->w->p.l->s.s)
 			break;
 		b--;
 		if (!isalpha(*b) && *b != '_') {
@@ -763,7 +767,7 @@ sel_word_prv(const char **beg, const char **end)
 		skip = 1;
 
 	do {
-		if (e == ctab->w->l->s.s)
+		if (e == ctab->w->p.l->s.s)
 			break;
 		e--;
 		if (skip && (isalpha(*e) || *e == '_'))
@@ -777,7 +781,7 @@ sel_word_prv(const char **beg, const char **end)
 
 	b = e;
 	do {
-		if (b == ctab->w->l->s.s)
+		if (b == ctab->w->p.l->s.s)
 			break;
 		b--;
 		if (!isalpha(*b) && *b != '_') {
@@ -793,8 +797,8 @@ sel_word_prv(const char **beg, const char **end)
 void
 set_bar_buf(struct fbuf *fb)
 {
-	bar.fb = fb;
-	bar.l = bar.draw = lineof(fb->lines.beg);
+	bar.p.fb = fb;
+	bar.p.l = bar.draw = lineof(fb->lines.beg);
 	set_col(&bar, 0);
 	refreshw(&bar);
 }
@@ -802,51 +806,51 @@ set_bar_buf(struct fbuf *fb)
 void
 set_col(struct win *w, int col)
 {
-	ctab->w->col = align(col, 0, ctab->w->l->s.len - 1);
-	ctab->w->fb->pos.col = ctab->w->col;
+	ctab->w->p.col = align(col, 0, ctab->w->p.l->s.len - 1);
+	ctab->w->p.fb->pos.col = ctab->w->p.col;
 	refreshw(ctab->w);
 }
 
 void
 set_row(struct win *w, int row)
 {
-	int orig = w->row;
+	int orig = w->p.row;
 
-	w->row = align(row, 0, w->fb->nline - 1);
-	if (w->row <= w->rowoff)
-		w->rowoff = w->row;
-	else if (w->row >= w->rowoff + w->h)
-		w->rowoff = w->row - w->h + 1;
-	w->fb->pos.row = w->row;
-	w->fb->pos.rowoff = w->rowoff;
+	w->p.row = align(row, 0, w->p.fb->nline - 1);
+	if (w->p.row <= w->p.rowoff)
+		w->p.rowoff = w->p.row;
+	else if (w->p.row >= w->p.rowoff + w->h)
+		w->p.rowoff = w->p.row - w->h + 1;
+	w->p.fb->pos.row = w->p.row;
+	w->p.fb->pos.rowoff = w->p.rowoff;
 
 	refreshw(w);
 
-	if (w->row == 0) {
-		w->l = lineof(w->fb->lines.beg);
-	} else if (w->row == w->fb->nline - 1) {
-		w->l = lineof(w->fb->lines.end);
-	} else if (w->row > orig) {
-		w->l = get_line_nex(w->l, w->row - orig);
-	} else if (w->row < orig) {
-		w->l = get_line_prv(w->l, orig - w->row);
+	if (w->p.row == 0) {
+		w->p.l = lineof(w->p.fb->lines.beg);
+	} else if (w->p.row == w->p.fb->nline - 1) {
+		w->p.l = lineof(w->p.fb->lines.end);
+	} else if (w->p.row > orig) {
+		w->p.l = get_line_nex(w->p.l, w->p.row - orig);
+	} else if (w->p.row < orig) {
+		w->p.l = get_line_prv(w->p.l, orig - w->p.row);
 	}
 	get_draw_line(w);
 
-	w->fb->pos.l = w->l;
+	w->p.fb->pos.l = w->p.l;
 
-	set_col(w, w->col);
+	set_col(w, w->p.col);
 }
 
 void
 set_rowcol(struct marker *m)
 {
-	ctab->w->fb = m->fb;
-	if (ctab->w->fb->ldirty || !m->l)
+	ctab->w->p.fb = m->fb;
+	if (ctab->w->p.fb->ldirty || !m->l)
 		m->l = get_line_nex(lineof(m->fb->lines.beg), m->row);
-	ctab->w->l = m->l;
-	ctab->w->row = m->row;
-	ctab->w->rowoff = m->rowoff;
+	ctab->w->p.l = m->l;
+	ctab->w->p.row = m->row;
+	ctab->w->p.rowoff = m->rowoff;
 	set_row(ctab->w, m->row);
 	set_col(ctab->w, m->col);
 }
@@ -855,15 +859,15 @@ set_rowcol(struct marker *m)
 void
 concat_line(const union arg *arg)
 {
-	struct line *l = ctab->w->l, *prv;
+	struct line *l = ctab->w->p.l, *prv;
 
-	ctab->w->fb->ldirty = 1;
+	ctab->w->p.fb->ldirty = 1;
 
 	if (arg->i == -1) {
 		prv = lineof(l->link.prv);
 		if (!prv)
 			return;
-		ctab->w->col = prv->s.len;
+		ctab->w->p.col = prv->s.len;
 		move_row(&ARG(.i = -1));
 	} else {
 		prv = l;
@@ -875,7 +879,7 @@ concat_line(const union arg *arg)
 	prv->s.len -= 1; /* remove the '\n' */
 	estr_append_str(&prv->s, &l->s);
 
-	list_remove(&ctab->w->fb->lines, &l->link);
+	list_remove(&ctab->w->p.fb->lines, &l->link);
 
 	str_free(&l->s);
 	free(l);
@@ -886,8 +890,8 @@ concat_line(const union arg *arg)
 void
 backspace(const union arg *arg)
 {
-	struct line *l = ctab->w->l;
-	int pos = ctab->w->col - arg->i;
+	struct line *l = ctab->w->p.l;
+	int pos = ctab->w->p.col - arg->i;
 	if (pos < 0) {
 		concat_line(&ARG(.i = -1));
 		return;
@@ -916,13 +920,13 @@ cmd(const union arg *arg)
 	if (arg->s) {
 		dup = strdup(arg->s);
 	} else {
-		dup = strdup(bar.l->s.s);
-		if (dup[bar.l->s.len - 1] == '\n')
-			dup[bar.l->s.len - 1] = '\0';
-		bar.l->s.s[0] = '\n';
-		bar.l->s.s[1] = '\0';
-		bar.l->s.len = 1;
-		refreshl(&bar, bar.l);
+		dup = strdup(bar.p.l->s.s);
+		if (dup[bar.p.l->s.len - 1] == '\n')
+			dup[bar.p.l->s.len - 1] = '\0';
+		bar.p.l->s.s[0] = '\n';
+		bar.p.l->s.s[1] = '\0';
+		bar.p.l->s.len = 1;
+		refreshl(&bar, bar.p.l);
 	}
 
 	mode(&ARG(.i = MODE_NOR));
@@ -939,17 +943,17 @@ cmd(const union arg *arg)
 		break;
 	case MODE_SEARCH:
 		comp_pattern(dup, 0);
-		match(ctab->w->l->s.s);
+		match(ctab->w->p.l->s.s);
 		break;
 	}
 
-	if (!args.n || !args.elems[0])
+	if (!args.n || !args.e[0])
 		goto end;
 
 	for (int i = 0; cmds[i].cmd != NULL; i++) {
-		if (strcmp(cmds[i].cmd, args.elems[0]) == 0 ||
-		    strcmp(cmds[i].alias, args.elems[0]) == 0) {
-			cmds[i].func(args.n, (const char**)args.elems);
+		if (strcmp(cmds[i].cmd, args.e[0]) == 0 ||
+		    strcmp(cmds[i].alias, args.e[0]) == 0) {
+			cmds[i].func(args.n, (const char**)args.e);
 			break;
 		}
 	}
@@ -962,15 +966,15 @@ void
 delete(const union arg *arg)
 {
 	struct str buf;
-	struct line *l = ctab->w->l, *nex;
+	struct line *l = ctab->w->p.l, *nex;
 	int beg, end, beg2, end2;
 	int to_row, to_col;
 
 	if (!get_sel_area(&beg, &end, &beg2, &end2)) {
-		if (ctab->w->col >= (int)ctab->w->l->s.len - 1)
+		if (ctab->w->p.col >= (int)ctab->w->p.l->s.len - 1)
 			concat_line(&ARG(0));
 		else
-			estr_remove(&l->s, ctab->w->col, 1);
+			estr_remove(&l->s, ctab->w->p.col, 1);
 		refreshl(ctab->w, l);
 		return;
 	}
@@ -978,28 +982,28 @@ delete(const union arg *arg)
 	str_empty(&buf);
 
 	for_each_sel(l, row, nex, tmp) {
-		remove_line(ctab->w->fb, l);
+		remove_line(ctab->w->p.fb, l);
 	} for_each_sel_end;
 
-	l = ctab->w->l;
+	l = ctab->w->p.l;
 	estr_remove(&l->s, beg, end - beg);
-	refreshl(ctab->w, ctab->w->l);
+	refreshl(ctab->w, ctab->w->p.l);
 
-	if (SEL_MARKER.row != ctab->w->row) {
+	if (SEL_MARKER.row != ctab->w->p.row) {
 		estr_remove(&SEL_MARKER.l->s, beg2, end2 - beg2);
 		refreshl(ctab->w, SEL_MARKER.l);
 	}
 
-	to_row = ctab->w->row;
+	to_row = ctab->w->p.row;
 	to_col = beg;
-	if (SEL_MARKER.row < ctab->w->row) {
+	if (SEL_MARKER.row < ctab->w->p.row) {
 		estr_append_str(&SEL_MARKER.l->s, &l->s);
-		remove_line(ctab->w->fb, l);
+		remove_line(ctab->w->p.fb, l);
 		to_row = SEL_MARKER.row;
 		to_col = beg2;
-	} else if (SEL_MARKER.row > ctab->w->row) {
+	} else if (SEL_MARKER.row > ctab->w->p.row) {
 		estr_append_str(&l->s, &SEL_MARKER.l->s);
-		remove_line(ctab->w->fb, SEL_MARKER.l);
+		remove_line(ctab->w->p.fb, SEL_MARKER.l);
 	}
 
 	set_row(ctab->w, to_row);
@@ -1016,8 +1020,9 @@ goto_beg(const union arg *arg)
 		set_row(ctab->w, 0);
 		break;
 	case GOTO_IN_LINE:
-		jumping();
+		jump_start();
 		set_col(ctab->w, 0);
+		jump_done();
 		break;
 	}
 }
@@ -1027,11 +1032,12 @@ goto_end(const union arg *arg)
 {
 	switch (arg->i) {
 	case GOTO_IN_FILE:
-		set_row(ctab->w, ctab->w->fb->nline - 1);
+		set_row(ctab->w, ctab->w->p.fb->nline - 1);
 		break;
 	case GOTO_IN_LINE:
-		jumping();
-		set_col(ctab->w, ctab->w->l->s.len - 1);
+		jump_start();
+		set_col(ctab->w, ctab->w->p.l->s.len - 1);
+		jump_done();
 		break;
 	}
 }
@@ -1060,27 +1066,27 @@ void
 insert(const union arg *arg)
 {
 	const char *c;
-	struct line *l = ctab->w->l;
+	struct line *l = ctab->w->p.l;
 	struct str s;
 
 	s.s = (char*)arg->s;
 	s.len = 0;
 	for (c = arg->s; *c; c++) {
 		if (*c == '\n') {
-			estr_insert_str(&l->s, ctab->w->col - s.len, &s);
+			estr_insert_str(&l->s, ctab->w->p.col - s.len, &s);
 			s.s = (char*)(c + 1);
 			s.siz = s.len = 0;
 			new_line(&ARG(.i = 0x3)); /* 0b11 */
 			continue;
 		}
 		s.len++;
-		ctab->w->col++;
+		ctab->w->p.col++;
 	}
 
 	refreshl(ctab->w, l);
 
-	estr_insert_str(&l->s, ctab->w->col - s.len, &s);
-	set_col(ctab->w, ctab->w->col);
+	estr_insert_str(&l->s, ctab->w->p.col - s.len, &s);
+	set_col(ctab->w, ctab->w->p.col);
 }
 
 void
@@ -1126,14 +1132,15 @@ mode(const union arg *arg)
 void
 move_col(const union arg *arg)
 {
-	set_col(ctab->w, ctab->w->col + arg->i);
+	set_col(ctab->w, ctab->w->p.col + arg->i);
 	has_sel = NULL;
 }
 
 void
 move_row(const union arg *arg)
 {
-	set_row(ctab->w, ctab->w->row + arg->i);
+	set_row(ctab->w, ctab->w->p.row + arg->i);
+	cursors.e[cursor].sel = 0;
 	has_sel = NULL;
 }
 
@@ -1178,6 +1185,56 @@ search(const union arg *arg)
 void
 sel(const union arg *arg)
 {
+	int beg = MIN(SEL_MARKER.row, ctab->w->p.row),
+	    end = MAX(SEL_MARKER.row, ctab->w->p.row);
+	struct line *l;
+	struct marker *beg_marker, *end_marker;
+
+	if (SEL_MARKER.row == ctab->w->p.row) {
+		beg = MIN(SEL_MARKER.col, ctab->w->p.col);
+		end = MAX(SEL_MARKER.col, ctab->w->p.col);
+		darr_resize(&cursors, 1);
+		cursor = 0;
+		cursors.e[cursor].row = ctab->w->p.row;
+		cursors.e[cursor].col = beg;
+		cursors.e[cursor].sel = end - beg;
+		cursors.e[cursor].l = ctab->w->p.l;
+		has_sel = ctab->w->p.l;
+		return;
+	}
+
+	darr_resize(&cursors, end - beg + 1);
+	cursor = 0;
+	end = end - beg;
+	beg = 0;
+
+	if (SEL_MARKER.row < ctab->w->p.row) {
+		beg_marker = &SEL_MARKER;
+		end_marker = &ctab->w->p;
+		cursor = end;
+	} else {
+		beg_marker = &ctab->w->p;
+		end_marker = &SEL_MARKER;
+	}
+
+	cursors.e[beg].row = beg_marker->row;
+	cursors.e[beg].col = beg_marker->col;
+	cursors.e[beg].sel = beg_marker->l->s.len - beg_marker->col;
+	cursors.e[beg].l   = beg_marker->l;
+	cursors.e[end].row = end_marker->row;
+	cursors.e[end].col = 0;
+	cursors.e[end].sel = end_marker->col;
+	cursors.e[end].l   = end_marker->l;
+
+	l = lineof(beg_marker->l->link.nex);
+	for (int i = beg + 1, j = 1; l && i < end; i++, j++) {
+		cursors.e[j].col = 0;
+		cursors.e[j].row = i;
+		cursors.e[j].sel = l->s.len;
+		cursors.e[j].l = l;
+		l = lineof(l->link.nex);
+	}
+
 	has_sel = SEL_MARKER.l;
 }
 
@@ -1186,12 +1243,14 @@ sel_line(const union arg *arg)
 {
 	if (arg->i > 0) {
 		set_col(ctab->w, 0);
-		jumping();
-		set_col(ctab->w, ctab->w->l->s.len - 1);
+		jump_start();
+		set_col(ctab->w, ctab->w->p.l->s.len - 1);
+		jump_done();
 	} else {
-		set_col(ctab->w, ctab->w->l->s.len - 1);
-		jumping();
+		set_col(ctab->w, ctab->w->p.l->s.len - 1);
+		jump_start();
 		set_col(ctab->w, 0);
+		jump_done();
 	}
 }
 
@@ -1202,8 +1261,8 @@ sel_word(const union arg *arg)
 	struct marker fake;
 	struct line *l;
 
-	l = ctab->w->l;
-	beg = l->s.s + ctab->w->col;
+	l = ctab->w->p.l;
+	beg = l->s.s + ctab->w->p.col;
 
 	if (arg->i > 0)
 		sel_word_nex(&beg, &end);
@@ -1214,10 +1273,11 @@ sel_word(const union arg *arg)
 
 	fake.col = beg - l->s.s;
 	set_rowcol(&fake);
-	jumping();
+	jump_start();
 
 	fake.col = end - l->s.s;
 	set_rowcol(&fake);
+	jump_done();
 
 	refreshw(ctab->w);
 
@@ -1233,7 +1293,7 @@ sel_word(const union arg *arg)
 void
 yank(const union arg *arg)
 {
-	// struct line *l = ctab->w->l;
+	// struct line *l = ctab->w->p.l;
 	// int beg, end;
 
 	// if (!get_sel_area(&beg, &end))
@@ -1253,15 +1313,15 @@ cmd_edit(int argc, const char *argv[])
 
 	if (argc > 1 && argv) {
 		for (int i = 0; i < fbs.n; i++) {
-			if (strcmp(fbs.elems[i].path, argv[1]) == 0) {
-				fb = &fbs.elems[i];
+			if (strcmp(fbs.e[i].path, argv[1]) == 0) {
+				fb = &fbs.e[i];
 				goto setwin;
 			}
 		}
 	}
 
 	darr_expand(&fbs);
-	fb = &fbs.elems[fbs.n - 1];
+	fb = &fbs.e[fbs.n - 1];
 	memset(fb, 0, sizeof(*fb));
 
 	list_init(&fb->lines);
@@ -1296,13 +1356,13 @@ cmd_write(int argc, const char *argv[])
 	FILE *fp;
 
 	if (argc <= 1 || !argv[1]) {
-		if (!(fp = fopen(ctab->w->fb->path, "w")))
+		if (!(fp = fopen(ctab->w->p.fb->path, "w")))
 			return;
 	} else {
 		fp = fopen(argv[1], "w");
 	}
 
-	list_for_each(struct line, l, ctab->w->fb->lines.beg, tmp, link)
+	list_for_each(struct line, l, ctab->w->p.fb->lines.beg, tmp, link)
 		fputs(l->s.s, fp);
 
 	fclose(fp);

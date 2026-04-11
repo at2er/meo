@@ -12,14 +12,14 @@
 
 #define darr(TYPE) \
 	struct { \
-		TYPE *elems; \
+		TYPE *e; \
 		int n; \
 	}
 
 #define darr_append(DARR, ELEM) \
 	do { \
 		darr_expand(DARR); \
-		(DARR)->elems[(DARR)->n - 1] = (ELEM); \
+		(DARR)->e[(DARR)->n - 1] = (ELEM); \
 	} while (0)
 
 #define darr_expand(DARR) \
@@ -28,14 +28,16 @@
 #define darr_init(DARR) \
 	do { \
 		(DARR)->n = 0; \
-		(DARR)->elems = NULL; \
+		(DARR)->e = NULL; \
 	} while (0)
 
 #define darr_resize(DARR, N) \
 	do { \
+		if ((DARR)->n == (N)) \
+			break; \
 		(DARR)->n = (N); \
-		(DARR)->elems = UTILSH_DARR_REALLOC((DARR)->elems, \
-				(DARR)->n * sizeof(*(DARR)->elems)); \
+		(DARR)->e = UTILSH_DARR_REALLOC((DARR)->e, \
+				(DARR)->n * sizeof(*(DARR)->e)); \
 	} while (0)
 
 #endif

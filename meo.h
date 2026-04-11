@@ -21,7 +21,7 @@ struct cmd {
 };
 
 struct cursor {
-	int row, col, len;
+	int row, col, sel;
 	struct line *l;
 };
 
@@ -55,10 +55,9 @@ struct tab {
 };
 
 struct win {
-	struct fbuf *fb;
-	struct line *l, *draw;
+	struct line *draw;
+	struct marker p;
 	int refresh;
-	int row, rowoff, col;
 	int x, y, w, h;
 };
 
