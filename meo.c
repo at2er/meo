@@ -30,6 +30,8 @@
 		(LINE) = ctab->w->row > SEL_MARKER.row \
 				? SEL_MARKER.l : ctab->w->l; \
 		(LINE) = lineof((LINE)->link.nex); \
+		if (!(LINE)) \
+			break; \
 		(NEX) = lineof((LINE)->link.nex); \
 		for (int ROW = MIN(ctab->w->row, SEL_MARKER.row) + 1, \
 				TMP = MAX(ctab->w->row, SEL_MARKER.row); \
@@ -730,11 +732,11 @@ void
 sel_word_nex(const char **beg, const char **end)
 {
 	const char *b = *beg, *e = *end;
-	while (!isalpha(*b))
+	while (*b && !isalpha(*b))
 		b++;
 	e = b;
 
-	while (isalpha(*e) || *e == '_')
+	while (*e && (isalpha(*e) || *e == '_'))
 		e++;
 	do {
 		if (b == ctab->w->l->s.s)
