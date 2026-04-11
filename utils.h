@@ -5,6 +5,7 @@
 
 #define MAX(A, B) ((A) > (B) ? (A) : (B))
 #define MIN(A, B) ((A) < (B) ? (A) : (B))
+#define LENGTH(ARR) (sizeof(ARR) / sizeof((ARR)[0]))
 
 #define xor_swap(A, B) \
 	do { \

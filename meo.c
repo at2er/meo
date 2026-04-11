@@ -46,11 +46,11 @@
 #define refreshw(WREF) ((WREF)->refresh = 1)
 
 static void comp_pattern(const char *p, int len);
-static void copy(const char *s);
+// static void copy(const char *s);
 static void draw(void);
 static void draw_sel(void);
 static void draw_win(struct win *w);
-static void dup_to_reg(int r, const char *s, int len);
+// static void dup_to_reg(int r, const char *s, int len);
 static void empty_fbuf(struct fbuf *fb);
 static struct line *empty_line(void);
 static void fini(void);
@@ -151,39 +151,39 @@ comp_pattern(const char *p, int len)
 	}
 }
 
-void
-copy(const char *s)
-{
-	const char **cmd = NULL;
-	int fds[2];
-	struct sigaction sa;
-
-	if (!(cmd = copy_cmd()))
-		return;
-
-	if (pipe(fds) < 0)
-		die("pipe()");
-
-	if (fork() == 0) {
-		setsid();
-
-		sigemptyset(&sa.sa_mask);
-		sa.sa_flags = 0;
-		sa.sa_handler = SIG_DFL;
-		sigaction(SIGCHLD, &sa, NULL);
-
-		close(fds[1]);
-		if (dup2(fds[0], STDIN_FILENO) < 0)
-			die("dup2()");
-		close(fds[0]);
-		execvp(cmd[0], (char**)cmd);
-		die("execvp()");
-	}
-
-	close(fds[0]);
-	write(fds[1], s, strlen(s));
-	close(fds[1]);
-}
+// void
+// copy(const char *s)
+// {
+// 	const char **cmd = NULL;
+// 	int fds[2];
+// 	struct sigaction sa;
+//
+// 	if (!(cmd = copy_cmd()))
+// 		return;
+//
+// 	if (pipe(fds) < 0)
+// 		die("pipe()");
+//
+// 	if (fork() == 0) {
+// 		setsid();
+//
+// 		sigemptyset(&sa.sa_mask);
+// 		sa.sa_flags = 0;
+// 		sa.sa_handler = SIG_DFL;
+// 		sigaction(SIGCHLD, &sa, NULL);
+//
+// 		close(fds[1]);
+// 		if (dup2(fds[0], STDIN_FILENO) < 0)
+// 			die("dup2()");
+// 		close(fds[0]);
+// 		execvp(cmd[0], (char**)cmd);
+// 		die("execvp()");
+// 	}
+//
+// 	close(fds[0]);
+// 	write(fds[1], s, strlen(s));
+// 	close(fds[1]);
+// }
 
 void
 draw(void)
@@ -257,19 +257,19 @@ draw_win(struct win *w)
 	w->refresh = 0;
 }
 
-void
-dup_to_reg(int r, const char *s, int len)
-{
-	char **reg = get_reg(r);
-	if (!reg)
-		return;
-	if (*reg)
-		free(*reg);
-	*reg = strndup(s, len);
-
-	if (r == '+')
-		copy(*reg);
-}
+// void
+// dup_to_reg(int r, const char *s, int len)
+// {
+// 	char **reg = get_reg(r);
+// 	if (!reg)
+// 		return;
+// 	if (*reg)
+// 		free(*reg);
+// 	*reg = strndup(s, len);
+//
+// 	if (r == '+')
+// 		copy(*reg);
+// }
 
 void
 empty_fbuf(struct fbuf *fb)
@@ -568,6 +568,8 @@ new_line(const union arg *arg)
 			prv ? &prv->link : NULL,
 			&l->link);
 	ctab->w->fb->nline++;
+	if (!(arg->i & 1))
+		ctab->w->l = prv;
 
 	if (arg->i & 1 << 1 && prv) {
 		s.s = prv->s.s + ctab->w->col;

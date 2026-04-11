@@ -1,11 +1,11 @@
-static const char **
-copy_cmd()
-{
-	static const char *c[] = {"wl-copy", NULL};
-	if (!getenv("WAYLAND_DISPLAY"))
-		return NULL;
-	return c;
-}
+// static const char **
+// copy_cmd()
+// {
+// 	static const char *c[] = {"wl-copy", NULL};
+// 	if (!getenv("WAYLAND_DISPLAY"))
+// 		return NULL;
+// 	return c;
+// }
 
 static const int sel_attr = SCTUI_BGSET(SCTUI_BLACK);
 
