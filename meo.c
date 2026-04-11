@@ -25,33 +25,16 @@
 
 #define MAX_MACHES 1
 
-/* inside the selection, other line must handle by hand */
-#define for_each_sel(LINE, ROW, NEX, TMP) \
-	do { \
-		(LINE) = ctab->w->p.row > SEL_MARKER.row \
-				? SEL_MARKER.l : ctab->w->p.l; \
-		(LINE) = lineof((LINE)->link.nex); \
-		if (!(LINE)) \
-			break; \
-		(NEX) = lineof((LINE)->link.nex); \
-		for (int ROW = MIN(ctab->w->p.row, SEL_MARKER.row) + 1, \
-				TMP = MAX(ctab->w->p.row, SEL_MARKER.row); \
-				(LINE) && ROW < TMP; \
-				ROW++, (LINE) = (NEX), \
-				(NEX) = lineof((LINE)->link.nex))
-#define for_each_sel_end \
-	} while (0);
-
 #define ARG(...) (union arg){__VA_ARGS__}
 #define lineof(LINK) list_container_of(LINK, struct line, link)
 #define refreshw(WREF) ((WREF)->refresh = 1)
 
 static void comp_pattern(const char *p, int len);
-// static void copy(const char *s);
+static void copy(const char *s);
 static void draw(void);
 static void draw_sel(void);
 static void draw_win(struct win *w);
-// static void dup_to_reg(int r, const char *s, int len);
+static void dup_to_reg(int r, const char *s, int len);
 static void empty_fbuf(struct fbuf *fb);
 static struct line *empty_line(void);
 static void fini(void);
@@ -64,7 +47,6 @@ static char **get_reg(int k);
 static void get_rowcol(struct marker *m);
 static int get_rx(struct line *l, int col);
 static int get_ry(int row);
-static int get_sel_area(int *beg, int *end, int *beg2, int *end2);
 static void init(void);
 static void jump_done(void);
 static void jump_start(void);
@@ -154,39 +136,39 @@ comp_pattern(const char *p, int len)
 	}
 }
 
-// void
-// copy(const char *s)
-// {
-// 	const char **cmd = NULL;
-// 	int fds[2];
-// 	struct sigaction sa;
-//
-// 	if (!(cmd = copy_cmd()))
-// 		return;
-//
-// 	if (pipe(fds) < 0)
-// 		die("pipe()");
-//
-// 	if (fork() == 0) {
-// 		setsid();
-//
-// 		sigemptyset(&sa.sa_mask);
-// 		sa.sa_flags = 0;
-// 		sa.sa_handler = SIG_DFL;
-// 		sigaction(SIGCHLD, &sa, NULL);
-//
-// 		close(fds[1]);
-// 		if (dup2(fds[0], STDIN_FILENO) < 0)
-// 			die("dup2()");
-// 		close(fds[0]);
-// 		execvp(cmd[0], (char**)cmd);
-// 		die("execvp()");
-// 	}
-//
-// 	close(fds[0]);
-// 	write(fds[1], s, strlen(s));
-// 	close(fds[1]);
-// }
+void
+copy(const char *s)
+{
+	const char **cmd = NULL;
+	int fds[2];
+	struct sigaction sa;
+
+	if (!(cmd = copy_cmd()))
+		return;
+
+	if (pipe(fds) < 0)
+		die("pipe()");
+
+	if (fork() == 0) {
+		setsid();
+
+		sigemptyset(&sa.sa_mask);
+		sa.sa_flags = 0;
+		sa.sa_handler = SIG_DFL;
+		sigaction(SIGCHLD, &sa, NULL);
+
+		close(fds[1]);
+		if (dup2(fds[0], STDIN_FILENO) < 0)
+			die("dup2()");
+		close(fds[0]);
+		execvp(cmd[0], (char**)cmd);
+		die("execvp()");
+	}
+
+	close(fds[0]);
+	write(fds[1], s, strlen(s));
+	close(fds[1]);
+}
 
 void
 draw(void)
@@ -248,19 +230,19 @@ draw_win(struct win *w)
 	w->refresh = 0;
 }
 
-// void
-// dup_to_reg(int r, const char *s, int len)
-// {
-// 	char **reg = get_reg(r);
-// 	if (!reg)
-// 		return;
-// 	if (*reg)
-// 		free(*reg);
-// 	*reg = strndup(s, len);
-//
-// 	if (r == '+')
-// 		copy(*reg);
-// }
+void
+dup_to_reg(int r, const char *s, int len)
+{
+	char **reg = get_reg(r);
+	if (!reg)
+		return;
+	if (*reg)
+		free(*reg);
+	*reg = strndup(s, len);
+
+	if (r == '+')
+		copy(*reg);
+}
 
 void
 empty_fbuf(struct fbuf *fb)
@@ -403,38 +385,6 @@ get_ry(int row)
 	return ctab->w->y + row - ctab->w->p.rowoff;
 }
 
-int
-get_sel_area(int *beg, int *end, int *beg2, int *end2)
-{
-	if (!has_sel) {
-		*beg = *end = 0;
-		return 0;
-	}
-
-	if (SEL_MARKER.row > ctab->w->p.row) {
-		*beg = ctab->w->p.col;
-		*end = ctab->w->p.l->s.len;
-		*beg2 = 0;
-		*end2 = SEL_MARKER.col + 1;
-	} else if (SEL_MARKER.row < ctab->w->p.row) {
-		*beg = 0;
-		*end = ctab->w->p.col;
-		*beg2 = SEL_MARKER.col;
-		*end2 = SEL_MARKER.l->s.len;
-	} else {
-		*beg = SEL_MARKER.col;
-		*end = ctab->w->p.col;
-		if (*beg > *end)
-			xor_swap(*beg, *end);
-		*beg2 = *beg;
-		*end2 = *end;
-		if (*beg == *end)
-			return 0;
-	}
-
-	return 1;
-}
-
 void
 init(void)
 {
@@ -486,7 +436,13 @@ init(void)
 void
 jump_done(void)
 {
-	cursors.e[cursor].sel = ctab->w->p.col - cursors.e[cursor].col;
+	if (ctab->w->p.col > cursors.e[cursor].col) {
+		cursors.e[cursor].sel = ctab->w->p.col - cursors.e[cursor].col;
+	} else {
+		cursors.e[cursor].sel = cursors.e[cursor].col - ctab->w->p.col;
+		set_col(ctab->w, ctab->w->p.col);
+		cursors.e[cursor].col = ctab->w->p.col;
+	}
 }
 
 void
@@ -566,16 +522,15 @@ new_line(const union arg *arg)
 	ctab->w->p.fb->ldirty = 1;
 
 	l = ecalloc(1, sizeof(*l));
-	if (!(arg->i & 1))
+	if (arg->s[0] == 'u')
 		prv = lineof(prv->link.prv);
 	list_insert(&ctab->w->p.fb->lines,
 			prv ? &prv->link : NULL,
 			&l->link);
 	ctab->w->p.fb->nline++;
-	if (!(arg->i & 1))
-		ctab->w->p.l = prv;
+	ctab->w->p.l = l;
 
-	if (arg->i & 1 << 1 && prv) {
+	if (arg->s[1] && prv) {
 		s.s = prv->s.s + ctab->w->p.col;
 		s.len = prv->s.len - ctab->w->p.col;
 		s.siz = s.len + 1;
@@ -587,7 +542,7 @@ new_line(const union arg *arg)
 	}
 
 	set_col(ctab->w, 0);
-	move_row(&ARG(.i = (arg->i & 1)));
+	move_row(&ARG(.i = arg->s[0] == 'd'));
 
 	if (prv)
 		refreshl(ctab->w, prv);
@@ -597,10 +552,11 @@ new_line(const union arg *arg)
 void
 paste(const union arg *arg)
 {
-	char **reg = get_reg(arg->i);
+	char **reg = get_reg(arg->s[0]);
 	if (!reg || !*reg)
 		return;
-	move_col(&ARG(.i = 1));
+	if (!arg->s[1])
+		move_col(&ARG(.i = 1));
 	insert(&ARG(.s = *reg));
 }
 
@@ -879,10 +835,7 @@ concat_line(const union arg *arg)
 	prv->s.len -= 1; /* remove the '\n' */
 	estr_append_str(&prv->s, &l->s);
 
-	list_remove(&ctab->w->p.fb->lines, &l->link);
-
-	str_free(&l->s);
-	free(l);
+	remove_line(ctab->w->p.fb, l);
 
 	refreshl(ctab->w, prv);
 }
@@ -966,48 +919,48 @@ void
 delete(const union arg *arg)
 {
 	struct str buf;
-	struct line *l = ctab->w->p.l, *nex;
-	int beg, end, beg2, end2;
-	int to_row, to_col;
+	struct cursor *c;
+	int len;
 
-	if (!get_sel_area(&beg, &end, &beg2, &end2)) {
+	if (!has_sel) {
 		if (ctab->w->p.col >= (int)ctab->w->p.l->s.len - 1)
 			concat_line(&ARG(0));
 		else
-			estr_remove(&l->s, ctab->w->p.col, 1);
-		refreshl(ctab->w, l);
+			estr_remove(&ctab->w->p.l->s, ctab->w->p.col, 1);
+		refreshl(ctab->w, ctab->w->p.l);
 		return;
 	}
 
 	str_empty(&buf);
 
-	for_each_sel(l, row, nex, tmp) {
-		remove_line(ctab->w->p.fb, l);
-	} for_each_sel_end;
-
-	l = ctab->w->p.l;
-	estr_remove(&l->s, beg, end - beg);
-	refreshl(ctab->w, ctab->w->p.l);
-
-	if (SEL_MARKER.row != ctab->w->p.row) {
-		estr_remove(&SEL_MARKER.l->s, beg2, end2 - beg2);
-		refreshl(ctab->w, SEL_MARKER.l);
+	c = cursors.e;
+	set_row(ctab->w, c->row);
+	for (int i = 0, n = cursors.n, concat = 0; i < n;
+			i++, c++, concat = 0) {
+		len = ctab->w->p.l->s.len;
+		if (c->sel == 0)
+			continue;
+		if (c->col + c->sel >= len) {
+			c->sel -= 1;
+			concat = 1;
+		}
+		estr_append_str(&buf, &STR(
+					ctab->w->p.l->s.s + c->col,
+					c->sel + concat));
+		estr_remove(&ctab->w->p.l->s, c->col, c->sel);
+		if (concat) {
+			cursors.e[i + 1].col += ctab->w->p.l->s.len - 1;
+			concat_line(&ARG(0));
+			cursors.e[i + 1].l = ctab->w->p.l;
+		}
+		refreshl(ctab->w, ctab->w->p.l);
 	}
 
-	to_row = ctab->w->p.row;
-	to_col = beg;
-	if (SEL_MARKER.row < ctab->w->p.row) {
-		estr_append_str(&SEL_MARKER.l->s, &l->s);
-		remove_line(ctab->w->p.fb, l);
-		to_row = SEL_MARKER.row;
-		to_col = beg2;
-	} else if (SEL_MARKER.row > ctab->w->p.row) {
-		estr_append_str(&l->s, &SEL_MARKER.l->s);
-		remove_line(ctab->w->p.fb, SEL_MARKER.l);
-	}
+	set_row(ctab->w, cursors.e[0].row);
+	set_col(ctab->w, cursors.e[0].col);
 
-	set_row(ctab->w, to_row);
-	set_col(ctab->w, to_col);
+	dup_to_reg('+', buf.s, buf.len);
+	str_free(&buf);
 
 	has_sel = NULL;
 }
@@ -1076,7 +1029,7 @@ insert(const union arg *arg)
 			estr_insert_str(&l->s, ctab->w->p.col - s.len, &s);
 			s.s = (char*)(c + 1);
 			s.siz = s.len = 0;
-			new_line(&ARG(.i = 0x3)); /* 0b11 */
+			new_line(&ARG(.s = "dI")); /* keep the text of line */
 			continue;
 		}
 		s.len++;
@@ -1293,13 +1246,6 @@ sel_word(const union arg *arg)
 void
 yank(const union arg *arg)
 {
-	// struct line *l = ctab->w->p.l;
-	// int beg, end;
-
-	// if (!get_sel_area(&beg, &end))
-	// 	return;
-
-	// dup_to_reg(arg->i, l->s.s + beg, end - beg);
 }
 
 /* command functions */

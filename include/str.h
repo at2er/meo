@@ -16,6 +16,7 @@
 #define UTILSH_STR_H
 #include <stddef.h>
 
+#define STR(CSTR, LEN) (struct str){(CSTR), (LEN), (LEN) + 1}
 /* Use this format macro for printf or else string format function
  * with STR_ARG() */
 #define STR_FMT "%.*s"
@@ -305,6 +306,8 @@ str_remove(struct str *s, size_t pos, size_t len)
 {
 	/* TODO: UTILSH_STR_REMOVE_MIN */
 	if (!s)
+		return NULL;
+	if (len == 0)
 		return NULL;
 	if (pos > s->len)
 		return NULL;

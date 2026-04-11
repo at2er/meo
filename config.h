@@ -1,11 +1,11 @@
-// static const char **
-// copy_cmd()
-// {
-// 	static const char *c[] = {"wl-copy", NULL};
-// 	if (!getenv("WAYLAND_DISPLAY"))
-// 		return NULL;
-// 	return c;
-// }
+static const char **
+copy_cmd()
+{
+	static const char *c[] = {"wl-copy", NULL};
+	if (!getenv("WAYLAND_DISPLAY"))
+		return NULL;
+	return c;
+}
 
 static const int sel_attr = SCTUI_BGSET(SCTUI_BLACK);
 
@@ -39,9 +39,10 @@ static const struct key normal_keys[] = {
 	{"m",    mark,        {0}                },
 	{"n",    search,      {.i =  1}          },
 	{"N",    search,      {.i = -1}          },
-	{"o",    new_line,    {.i = DOWN}        },
-	{"O",    new_line,    {.i = UP}          },
-	{"p",    paste,       {.i = '+'}         },
+	{"o",    new_line,    {.s = "d"}         },
+	{"O",    new_line,    {.s = "u"}         },
+	{"p",    paste,       {.s = "+"}         },
+	{"P",    paste,       {.s = "+P"}        },
 	{"q",    quit,        {0}                },
 	{"v",    sel,         {0}                },
 	{"w",    sel_word,    {.i = 1}           },
