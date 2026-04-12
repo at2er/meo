@@ -88,7 +88,7 @@ static const struct key cmd_keys[] = {
 static struct cmd cmds[] = {
 	/* cmd       alias   func       */
 	// {"buffer",   "b",    cmd_buffer  },
-	// {"buffers",  "bs",   cmd_buffers },
+	{"buffers",  "bs",   cmd_buffers },
 	{"edit",     "e",    cmd_edit    },
 	{"write",    "w",    cmd_write   },
 	{"quit",     "q",    cmd_quit    },

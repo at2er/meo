@@ -5,6 +5,7 @@
 
 enum { MODE_NOR, MODE_INS, MODE_CMD, MODE_SEARCH };
 enum { GOTO_IN_FILE, GOTO_IN_LINE };
+enum { SPLIT_HOR, SPLIT_VER };
 enum { UP, DOWN };
 
 struct fbuf;
@@ -36,7 +37,8 @@ struct fbuf {
 	int nline;
 	char path[FILENAME_MAX];
 
-	unsigned int ldirty:1; /* lines dirty */
+	unsigned int ldirty:1, /* lines dirty */
+	             tmp:1;    /* auto remove after quit */
 
 	struct marker pos;
 };
@@ -49,7 +51,7 @@ struct line {
 };
 
 struct tab {
-	struct win *w;
+	struct win *w, *prv_w;
 	struct win **wins;
 	int nwins;
 };
@@ -81,10 +83,11 @@ static void search(const union arg *arg);
 static void sel(const union arg *arg);
 static void sel_line(const union arg *arg);
 static void sel_word(const union arg *arg);
+static void split_win(const union arg *arg);
 static void yank(const union arg *arg);
 
 /* command functions */
-// static void cmd_buffers(int argc, const char *argv[]);
+static void cmd_buffers(int argc, const char *argv[]);
 static void cmd_edit(int argc, const char *argv[]);
 static void cmd_write(int argc, const char *argv[]);
 static void cmd_quit(int argc, const char *argv[]);

@@ -68,6 +68,7 @@ static void set_row(struct win *w, int row);
 static void set_rowcol(struct marker *m);
 static void sys_copy(const char *s);
 static char *sys_paste(void);
+static struct fbuf *tmp_fbuf(void);
 
 static const char *usages[] = {
 "Usage: meo [OPTIONS] [FILE]",
@@ -81,9 +82,9 @@ static struct option opts[] = {
 	OPT_END
 };
 
-typedef darr(struct fbuf) fb_arr;
-typedef darr(struct tab) tab_arr;
-typedef darr(struct win) win_arr;
+typedef darr(struct fbuf *) fb_arr;
+typedef darr(struct tab  *) tab_arr;
+typedef darr(struct win  *) win_arr;
 static fb_arr  fbs;
 static tab_arr tabs;
 static win_arr wins;
@@ -142,7 +143,7 @@ void
 draw(void)
 {
 	for (int i = 0; i < wins.n; i++)
-		draw_win(&wins.e[i]);
+		draw_win(wins.e[i]);
 
 	ruler();
 	draw_win(&bar);
@@ -362,13 +363,14 @@ init(void)
 	fds[0].fd = STDIN_FILENO;
 	fds[0].events = POLLIN;
 
-	darr_init(&tabs);
-	darr_expand(&tabs)
-	darr_init(&wins);
-	darr_expand(&wins)
+	ctab = ecalloc(1, sizeof(*ctab));
+	ctab->w = ecalloc(1, sizeof(*ctab->w));
 
-	ctab = tabs.e;
-	ctab->w = wins.e;
+	darr_init(&tabs);
+	darr_append(&tabs, ctab);
+	darr_init(&wins);
+	darr_append(&wins, ctab->w);
+
 	ctab->w->w = global_sctui.w;
 	ctab->w->h = global_sctui.h - 1;
 
@@ -855,6 +857,21 @@ sys_paste(void)
 	return result.s;
 }
 
+struct fbuf *
+tmp_fbuf(void)
+{
+	struct fbuf *fb = ecalloc(1 ,sizeof(*fb));
+
+	darr_append(&fbs, fb);
+	list_init(&fb->lines);
+
+	strcpy(fb->path, "<tmp>");
+	fb->tmp = 1;
+	fb->pos.fb = fb;
+
+	return fb;
+}
+
 /* key functions */
 void
 concat_line(const union arg *arg)
@@ -1285,6 +1302,39 @@ sel_word(const union arg *arg)
 }
 
 void
+split_win(const union arg *arg)
+{
+	struct win *win;
+
+	win = ecalloc(1, sizeof(*win));
+	darr_append(&wins, win);
+	memcpy(win, ctab->w, sizeof(*win));
+
+	switch (arg->i) {
+	case SPLIT_HOR:
+		win->w = ctab->w->w / 2;
+		win->h = ctab->w->h;
+		ctab->w->w = win->w + ctab->w->w % 2;
+		win->x = ctab->w->w;
+		break;
+	case SPLIT_VER:
+		win->w = ctab->w->w;
+		win->h = ctab->w->h / 2;
+		ctab->w->h = win->h + ctab->w->h % 2;
+		win->y = ctab->w->h;
+		break;
+	default:
+		die("unreachable");
+	}
+
+	set_row(win, win->p.row);
+	set_row(ctab->w, ctab->w->p.row);
+
+	ctab->prv_w = ctab->w;
+	ctab->w = win;
+}
+
+void
 yank(const union arg *arg)
 {
 	struct str buf;
@@ -1305,10 +1355,31 @@ yank(const union arg *arg)
 }
 
 /* command functions */
-// void
-// cmd_buffers(int argc, const char *argv[])
-// {
-// }
+void
+cmd_buffers(int argc, const char *argv[])
+{
+	struct fbuf *fb;
+	struct line *l;
+	int width;
+
+	split_win(&ARG(.i = SPLIT_VER));
+
+	fb = tmp_fbuf();
+
+	width = snprintf(sbuf, sizeof(sbuf), "%d", fbs.n - 1);
+
+	/* tmp_fbuf will append the [fb] to [fbs], so don't handle it */
+	for (int i = 0; i < fbs.n - 1; i++, fb->nline++) {
+		l = ecalloc(1, sizeof(*l));
+		str_empty(&l->s);
+		estr_expand_siz(&l->s, width + strlen(fbs.e[i]->path) + 16);
+		l->s.len = snprintf(l->s.s, l->s.siz, "%-*d\"%s\"\n",
+				width + 2, i, fbs.e[i]->path);
+		list_insert(&fb->lines, fb->lines.end, &l->link);
+	}
+
+	set_rowcol(&fb->pos);
+}
 
 void
 cmd_edit(int argc, const char *argv[])
@@ -1320,16 +1391,15 @@ cmd_edit(int argc, const char *argv[])
 
 	if (argc > 1 && argv) {
 		for (int i = 0; i < fbs.n; i++) {
-			if (strcmp(fbs.e[i].path, argv[1]) == 0) {
-				fb = &fbs.e[i];
+			if (strcmp(fbs.e[i]->path, argv[1]) == 0) {
+				fb = fbs.e[i];
 				goto setwin;
 			}
 		}
 	}
 
-	darr_expand(&fbs);
-	fb = &fbs.e[fbs.n - 1];
-	memset(fb, 0, sizeof(*fb));
+	fb = ecalloc(1, sizeof(*fb));
+	darr_append(&fbs, fb);
 
 	list_init(&fb->lines);
 
