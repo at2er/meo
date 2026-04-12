@@ -36,7 +36,7 @@ struct fbuf {
 	int nline;
 	char path[FILENAME_MAX];
 
-	int ldirty; /* lines dirty */
+	unsigned int ldirty:1; /* lines dirty */
 
 	struct marker pos;
 };
@@ -77,7 +77,6 @@ static void move_col(const union arg *arg);
 static void move_row(const union arg *arg);
 static void new_line(const union arg *arg);
 static void paste(const union arg *arg);
-static void quit(const union arg *arg);
 static void search(const union arg *arg);
 static void sel(const union arg *arg);
 static void sel_line(const union arg *arg);
@@ -85,6 +84,7 @@ static void sel_word(const union arg *arg);
 static void yank(const union arg *arg);
 
 /* command functions */
+// static void cmd_buffers(int argc, const char *argv[]);
 static void cmd_edit(int argc, const char *argv[]);
 static void cmd_write(int argc, const char *argv[]);
 static void cmd_quit(int argc, const char *argv[]);

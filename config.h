@@ -16,7 +16,7 @@ sys_paste_cmd()
 	return c;
 }
 
-static const int sel_attr = SCTUI_BGSET(SCTUI_BLACK);
+static const int sel_attr = SCTUI_BGSET(SCTUI_BLUE) | SCTUI_FGSET(SCTUI_BLACK);
 
 static const char *tab_render = "        ";
 
@@ -48,11 +48,11 @@ static const struct key normal_keys[] = {
 	{"m",    mark,        {0}                },
 	{"n",    search,      {.i =  1}          },
 	{"N",    search,      {.i = -1}          },
-	{"o",    new_line,    {.s = "d"}         },
-	{"O",    new_line,    {.s = "u"}         },
-	{"p",    paste,       {.s = "+"}         },
-	{"P",    paste,       {.s = "+P"}        },
-	{"q",    quit,        {0}                },
+	{"o",    new_line,    {.s = "d"   }      },
+	{"O",    new_line,    {.s = "u"   }      },
+	{"p",    paste,       {.s = "+"   }      },
+	{"P",    paste,       {.s = "+P"  }      },
+	{"q",    cmd,         {.s = "quit"}      },
 	{"v",    sel,         {0}                },
 	{"w",    sel_word,    {.i = 1}           },
 	{"y",    yank,        {.i = '+'}         },
@@ -86,9 +86,11 @@ static const struct key cmd_keys[] = {
 };
 
 static struct cmd cmds[] = {
-	/* cmd     alias   func    */
-	{"edit",   "e",    cmd_edit },
-	{"write",  "w",    cmd_write},
-	{"quit",   "q",    cmd_quit },
-	{NULL,     NULL,   NULL     }
+	/* cmd       alias   func       */
+	// {"buffer",   "b",    cmd_buffer  },
+	// {"buffers",  "bs",   cmd_buffers },
+	{"edit",     "e",    cmd_edit    },
+	{"write",    "w",    cmd_write   },
+	{"quit",     "q",    cmd_quit    },
+	{NULL,       NULL,   NULL        }
 };

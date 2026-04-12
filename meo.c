@@ -929,7 +929,11 @@ cmd(const union arg *arg)
 	mode(&ARG(.i = MODE_NOR));
 
 	switch (m) {
-	case MODE_CMD:
+	case MODE_SEARCH:
+		comp_pattern(dup, 0);
+		match(ctab->w->p.l->s.s);
+		break;
+	default:
 		for (tok = dup; ; tok = NULL) {
 			if (!(tok = strtok_r(tok, " \t\n", &saver)))
 				break;
@@ -937,10 +941,6 @@ cmd(const union arg *arg)
 		}
 		darr_append(&args, NULL);
 		args.n--;
-		break;
-	case MODE_SEARCH:
-		comp_pattern(dup, 0);
-		match(ctab->w->p.l->s.s);
 		break;
 	}
 
@@ -1145,12 +1145,6 @@ move_row(const union arg *arg)
 }
 
 void
-quit(const union arg *arg)
-{
-	running = 0;
-}
-
-void
 search(const union arg *arg)
 {
 	int (*fn)(void) = search_nex;
@@ -1311,6 +1305,11 @@ yank(const union arg *arg)
 }
 
 /* command functions */
+// void
+// cmd_buffers(int argc, const char *argv[])
+// {
+// }
+
 void
 cmd_edit(int argc, const char *argv[])
 {
@@ -1379,7 +1378,7 @@ cmd_write(int argc, const char *argv[])
 void
 cmd_quit(int argc, const char *argv[])
 {
-	quit(NULL);
+	running = 0;
 }
 
 int
