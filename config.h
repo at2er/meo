@@ -1,7 +1,16 @@
 static const char **
-copy_cmd()
+sys_copy_cmd()
 {
 	static const char *c[] = {"wl-copy", NULL};
+	if (!getenv("WAYLAND_DISPLAY"))
+		return NULL;
+	return c;
+}
+
+static const char **
+sys_paste_cmd()
+{
+	static const char *c[] = {"wl-paste", "-n", NULL};
 	if (!getenv("WAYLAND_DISPLAY"))
 		return NULL;
 	return c;

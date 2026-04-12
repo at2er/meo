@@ -30,7 +30,6 @@
 #define refreshw(WREF) ((WREF)->refresh = 1)
 
 static void comp_pattern(const char *p, int len);
-static void copy(const char *s);
 static void draw(void);
 static void draw_sel(void);
 static void draw_win(struct win *w);
@@ -63,9 +62,12 @@ static int search_prv(void);
 static void sel_word_nex(const char **beg, const char **end);
 static void sel_word_prv(const char **beg, const char **end);
 static void set_bar_buf(struct fbuf *fb);
+static void set_child(void);
 static void set_col(struct win *w, int col);
 static void set_row(struct win *w, int row);
 static void set_rowcol(struct marker *m);
+static void sys_copy(const char *s);
+static char *sys_paste(void);
 
 static const char *usages[] = {
 "Usage: meo [OPTIONS] [FILE]",
@@ -134,40 +136,6 @@ comp_pattern(const char *p, int len)
 		free(pattern);
 		pattern = NULL;
 	}
-}
-
-void
-copy(const char *s)
-{
-	const char **cmd = NULL;
-	int fds[2];
-	struct sigaction sa;
-
-	if (!(cmd = copy_cmd()))
-		return;
-
-	if (pipe(fds) < 0)
-		die("pipe()");
-
-	if (fork() == 0) {
-		setsid();
-
-		sigemptyset(&sa.sa_mask);
-		sa.sa_flags = 0;
-		sa.sa_handler = SIG_DFL;
-		sigaction(SIGCHLD, &sa, NULL);
-
-		close(fds[1]);
-		if (dup2(fds[0], STDIN_FILENO) < 0)
-			die("dup2()");
-		close(fds[0]);
-		execvp(cmd[0], (char**)cmd);
-		die("execvp()");
-	}
-
-	close(fds[0]);
-	write(fds[1], s, strlen(s));
-	close(fds[1]);
 }
 
 void
@@ -241,7 +209,7 @@ dup_to_reg(int r, const char *s, int len)
 	*reg = strndup(s, len);
 
 	if (r == '+')
-		copy(*reg);
+		sys_copy(*reg);
 }
 
 void
@@ -554,6 +522,11 @@ void
 paste(const union arg *arg)
 {
 	char **reg = get_reg(arg->s[0]);
+	if (arg->s[0] == '+') {
+		if (*reg)
+			free(*reg);
+		*reg = sys_paste();
+	}
 	if (!reg || !*reg)
 		return;
 	if (!arg->s[1])
@@ -761,6 +734,17 @@ set_bar_buf(struct fbuf *fb)
 }
 
 void
+set_child(void)
+{
+	struct sigaction sa;
+	setsid();
+	sigemptyset(&sa.sa_mask);
+	sa.sa_flags = 0;
+	sa.sa_handler = SIG_DFL;
+	sigaction(SIGCHLD, &sa, NULL);
+}
+
+void
 set_col(struct win *w, int col)
 {
 	ctab->w->p.col = align(col, 0, ctab->w->p.l->s.len - 1);
@@ -810,6 +794,65 @@ set_rowcol(struct marker *m)
 	ctab->w->p.rowoff = m->rowoff;
 	set_row(ctab->w, m->row);
 	set_col(ctab->w, m->col);
+}
+
+void
+sys_copy(const char *s)
+{
+	const char **cmd = NULL;
+	int fds[2];
+
+	if (!(cmd = sys_copy_cmd()))
+		return;
+
+	if (pipe(fds) < 0)
+		die("pipe()");
+
+	if (fork() == 0) {
+		set_child();
+		close(fds[1]);
+		if (dup2(fds[0], STDIN_FILENO) < 0)
+			die("dup2()");
+		close(fds[0]);
+		execvp(cmd[0], (char**)cmd);
+		die("execvp()");
+	}
+
+	close(fds[0]);
+	write(fds[1], s, strlen(s));
+	close(fds[1]);
+}
+
+char *
+sys_paste(void)
+{
+	const char **cmd = NULL;
+	int fds[2], r;
+	struct str result;
+
+	if (!(cmd = sys_paste_cmd()))
+		return NULL;
+
+	if (pipe(fds) < 0)
+		die("pipe()");
+
+	if (fork() == 0) {
+		set_child();
+		close(fds[0]);
+		if (dup2(fds[1], STDOUT_FILENO) < 0)
+			die("dup2()");
+		close(fds[1]);
+		execvp(cmd[0], (char**)cmd);
+		die("execvp()");
+	}
+
+	str_empty(&result);
+	close(fds[1]);
+	while ((r = read(fds[0], sbuf, sizeof(sbuf) - 1)))
+		estr_append_str(&result, &STR(sbuf, r));
+	close(fds[0]);
+
+	return result.s;
 }
 
 /* key functions */
@@ -921,7 +964,7 @@ delete(const union arg *arg)
 {
 	struct str buf;
 	struct cursor *c;
-	int len;
+	int len, sel;
 
 	if (!has_sel) {
 		if (ctab->w->p.col >= (int)ctab->w->p.l->s.len - 1)
@@ -941,15 +984,16 @@ delete(const union arg *arg)
 	for (int i = 0, n = cursors.n, concat = 0; i < n;
 			i++, c++, concat = 0) {
 		len = ctab->w->p.l->s.len;
-		if (!c->l || c->sel == 0)
+		sel = c->sel;
+		if (!c->l || sel == 0)
 			continue;
-		if (c->col + c->sel >= len) {
-			c->sel -= 1;
+		if (c->col + sel >= len) {
+			sel -= 1;
 			concat = 1;
 		}
-		estr_append_str(&buf, &STR(ctab->w->p.l->s.s + c->col, c->sel));
+		estr_append_str(&buf, &STR(ctab->w->p.l->s.s + c->col, sel));
 		estr_append_chr(&buf, '\n');
-		estr_remove(&ctab->w->p.l->s, c->col, c->sel);
+		estr_remove(&ctab->w->p.l->s, c->col, sel);
 		if (concat) {
 			cursors.e[i + 1].col += ctab->w->p.l->s.len - 1;
 			concat_line(&ARG(0));
@@ -1032,6 +1076,7 @@ insert(const union arg *arg)
 			s.s = (char*)(c + 1);
 			s.siz = s.len = 0;
 			new_line(&ARG(.s = "dI")); /* keep the text of line */
+			l = ctab->w->p.l;
 			continue;
 		}
 		s.len++;
@@ -1250,12 +1295,19 @@ yank(const union arg *arg)
 {
 	struct str buf;
 	struct cursor *c = cursors.e;
+	int sel;
 	str_empty(&buf);
 	for (int i = 0; i < cursors.n; i++, c++) {
-		if (!c->l || !c->sel)
+		sel = c->sel;
+		if (!c->l || !sel)
 			continue;
-		estr_append_str(&buf, &STR(c->l->s.s + c->col, c->sel));
+		if (c->col + sel >= (int)c->l->s.len)
+			sel -= 1;
+		estr_append_str(&buf, &STR(c->l->s.s + c->col, sel));
+		estr_append_chr(&buf, '\n');
 	}
+	dup_to_reg('+', buf.s, buf.len);
+	str_free(&buf);
 }
 
 /* command functions */
