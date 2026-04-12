@@ -528,7 +528,8 @@ new_line(const union arg *arg)
 			prv ? &prv->link : NULL,
 			&l->link);
 	ctab->w->p.fb->nline++;
-	ctab->w->p.l = l;
+	if (arg->s[0] == 'u')
+		ctab->w->p.l = l;
 
 	if (arg->s[1] && prv) {
 		s.s = prv->s.s + ctab->w->p.col;
@@ -935,18 +936,19 @@ delete(const union arg *arg)
 
 	c = cursors.e;
 	set_row(ctab->w, c->row);
+	/* FIXME: don't use 'ctab->w->p.l',
+	   the 'c->l' maybe not continuous. */
 	for (int i = 0, n = cursors.n, concat = 0; i < n;
 			i++, c++, concat = 0) {
 		len = ctab->w->p.l->s.len;
-		if (c->sel == 0)
+		if (!c->l || c->sel == 0)
 			continue;
 		if (c->col + c->sel >= len) {
 			c->sel -= 1;
 			concat = 1;
 		}
-		estr_append_str(&buf, &STR(
-					ctab->w->p.l->s.s + c->col,
-					c->sel + concat));
+		estr_append_str(&buf, &STR(ctab->w->p.l->s.s + c->col, c->sel));
+		estr_append_chr(&buf, '\n');
 		estr_remove(&ctab->w->p.l->s, c->col, c->sel);
 		if (concat) {
 			cursors.e[i + 1].col += ctab->w->p.l->s.len - 1;
@@ -1246,6 +1248,14 @@ sel_word(const union arg *arg)
 void
 yank(const union arg *arg)
 {
+	struct str buf;
+	struct cursor *c = cursors.e;
+	str_empty(&buf);
+	for (int i = 0; i < cursors.n; i++, c++) {
+		if (!c->l || !c->sel)
+			continue;
+		estr_append_str(&buf, &STR(c->l->s.s + c->col, c->sel));
+	}
 }
 
 /* command functions */
