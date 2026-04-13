@@ -1,2 +1,2 @@
 # Meo (Meow editor)
-A suckless-like text editor.
+A suck less (not `suckless`) text editor.

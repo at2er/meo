@@ -82,12 +82,8 @@ static struct option opts[] = {
 	OPT_END
 };
 
-typedef darr(struct fbuf *) fb_arr;
-typedef darr(struct tab  *) tab_arr;
-typedef darr(struct win  *) win_arr;
 static fb_arr  fbs;
 static tab_arr tabs;
-static win_arr wins;
 
 static struct win bar;
 static struct win *cmdback;
@@ -142,11 +138,13 @@ comp_pattern(const char *p, int len)
 void
 draw(void)
 {
-	for (int i = 0; i < wins.n; i++)
-		draw_win(wins.e[i]);
+	for (int i = 0; i < ctab->wins.n; i++)
+		draw_win(ctab->wins.e[i]);
 
 	ruler();
+	sctui_out(sctui_attr_on(bar_attr), 0);
 	draw_win(&bar);
+	sctui_out(sctui_attr_off(), 0);
 
 	if (has_sel)
 		draw_sel();
@@ -232,6 +230,8 @@ empty_line(void)
 void
 fini(void)
 {
+	sctui_close_alt_screen();
+	sctui_commit();
 	sctui_fini();
 }
 
@@ -360,6 +360,8 @@ init(void)
 	struct line *l;
 
 	sctui_init();
+	sctui_open_alt_screen();
+
 	fds[0].fd = STDIN_FILENO;
 	fds[0].events = POLLIN;
 
@@ -368,8 +370,8 @@ init(void)
 
 	darr_init(&tabs);
 	darr_append(&tabs, ctab);
-	darr_init(&wins);
-	darr_append(&wins, ctab->w);
+	darr_init(&ctab->wins);
+	darr_append(&ctab->wins, ctab->w);
 
 	ctab->w->w = global_sctui.w;
 	ctab->w->h = global_sctui.h - 1;
@@ -1307,7 +1309,7 @@ split_win(const union arg *arg)
 	struct win *win;
 
 	win = ecalloc(1, sizeof(*win));
-	darr_append(&wins, win);
+	darr_append(&ctab->wins, win);
 	memcpy(win, ctab->w, sizeof(*win));
 
 	switch (arg->i) {
@@ -1315,13 +1317,15 @@ split_win(const union arg *arg)
 		win->w = ctab->w->w / 2;
 		win->h = ctab->w->h;
 		ctab->w->w = win->w + ctab->w->w % 2;
-		win->x = ctab->w->w;
+		win->x = ctab->w->x + ctab->w->w + 1;
+		win->w -= 1;
 		break;
 	case SPLIT_VER:
 		win->w = ctab->w->w;
 		win->h = ctab->w->h / 2;
 		ctab->w->h = win->h + ctab->w->h % 2;
-		win->y = ctab->w->h;
+		win->y = ctab->w->y + ctab->w->h + 1;
+		win->h -= 1;
 		break;
 	default:
 		die("unreachable");
@@ -1330,8 +1334,10 @@ split_win(const union arg *arg)
 	set_row(win, win->p.row);
 	set_row(ctab->w, ctab->w->p.row);
 
-	ctab->prv_w = ctab->w;
+	win->prv = ctab->w;
+	win->prv->split = arg->i;
 	ctab->w = win;
+	ctab->w->split = arg->i;
 }
 
 void
@@ -1448,7 +1454,59 @@ cmd_write(int argc, const char *argv[])
 void
 cmd_quit(int argc, const char *argv[])
 {
-	running = 0;
+	struct fbuf *fb;
+	int using = 0;
+	struct win *w;
+
+	if (ctab->wins.n <= 1) {
+		running = 0;
+		return;
+	}
+
+	w = ctab->w;
+	ctab->w = ctab->w->prv;
+	switch (w->split) {
+	case SPLIT_HOR:
+		ctab->w->w += w->w;
+		break;
+	case SPLIT_VER:
+		ctab->w->h += w->h;
+		break;
+	}
+	refreshw(ctab->w);
+	fb = w->p.fb;
+	free(w);
+	for (int i = 0; i < ctab->wins.n; i++) {
+		if (ctab->wins.e[i] == w) {
+			darr_remove(&ctab->wins, i);
+			break;
+		}
+	}
+
+	if (!fb->tmp)
+		return;
+
+	for (int i = 0; i < tabs.n; i++)
+		for (int j = 0; j < tabs.e[i]->wins.n; j++)
+			using += tabs.e[i]->wins.e[j]->p.fb == fb;
+	using += 1; /* current */
+
+	if (using > 1)
+		return;
+
+	for (int i = 0; i < fbs.n; i++) {
+		if (fbs.e[i] == fb) {
+			darr_remove(&fbs, i);
+			break;
+		}
+	}
+
+	list_for_each(struct line, l, fb->lines.beg, nex, link) {
+		str_free(&l->s);
+		free(l);
+	}
+
+	free(fb);
 }
 
 int

@@ -42,6 +42,7 @@ struct fbuf {
 
 	struct marker pos;
 };
+typedef darr(struct fbuf *) fb_arr;
 
 struct line {
 	struct str s;
@@ -50,16 +51,19 @@ struct line {
 	struct utilsh_list link;
 };
 
+typedef darr(struct tab  *) tab_arr;
+typedef darr(struct win  *) win_arr;
 struct tab {
-	struct win *w, *prv_w;
-	struct win **wins;
-	int nwins;
+	struct win *w;
+	win_arr wins;
 };
 
 struct win {
 	struct line *draw;
 	struct marker p;
-	int refresh;
+	struct win *prv;
+	unsigned int refresh:1,
+	             split:1; /* 0:hor 1:ver */
 	int x, y, w, h;
 };
 

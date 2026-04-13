@@ -41,15 +41,30 @@
 #define TK_CTRL(K) ((K) & 0x1f)
 #define SCTUI_OUT_BUF_SIZ 8192
 
-/*  1 1  22  4  4
- * |x|x|0..|xx|xx|
- *  | |  |  |
- *  | *  |  FG (0..7)
- *  *    BG (0..7)    */
-#define SCTUI_FG(ATTR) ((ATTR) & 0x1000000f)
-#define SCTUI_BG(ATTR) ((ATTR) & 0x200000f0)
-#define SCTUI_FGSET(FG) (0x10000000 | (FG))
-#define SCTUI_BGSET(BG) (0x20000000 | ((BG) << 4))
+/* see 'man 4 console_codes'
+ *
+ *               22  4  4
+ * |b b b b b b|0..|bx|bx|
+ *  | | | | | |     |  |
+ *  | | | | | |     |  FG (0..7) (highest bit is the toggle)
+ *  | | | | | |     BG (0..7)    (highest bit is the toggle)
+ *  | | | | | reverse
+ *  | | | | blink
+ *  | | | underscore
+ *  | | italic
+ *  | half-bright
+ *  bold */
+#define SCTUI_FG(ATTR) ((ATTR) & 0x00000008)
+#define SCTUI_BG(ATTR) ((ATTR) & 0x00000080)
+#define SCTUI_SET_FG(FG) (0x00000008 | (FG))
+#define SCTUI_SET_BG(BG) (0x00000080 | ((BG) << 4))
+
+#define SCTUI_REVERSE     0x04000000
+#define SCTUI_BLINK       0x08000000
+#define SCTUI_UNDERSCORE  0x10000000
+#define SCTUI_ITALIC      0x20000000
+#define SCTUI_HALF_BRIGHT 0x40000000
+#define SCTUI_BOLD        0x80000000
 
 enum {
 	SCTUI_BLACK,
@@ -89,6 +104,9 @@ extern void sctui_move(int x, int y);
 extern void sctui_out(const char *str, int len);
 extern void sctui_text(int x, int y, const char *str, int len);
 extern void sctui_update(void);
+
+extern void sctui_close_alt_screen(void);
+extern void sctui_open_alt_screen(void);
 
 extern struct sctui global_sctui;
 
@@ -148,10 +166,24 @@ sctui_attr_on(int attr)
 {
 	char *s = global_sctui.cbuf;
 	s += sprintf(s, ESC_SGR_BEG);
+
+	if (SCTUI_BOLD & attr)
+		s += sprintf(s, ";1");
+	if (SCTUI_HALF_BRIGHT & attr)
+		s += sprintf(s, ";2");
+	if (SCTUI_ITALIC & attr)
+		s += sprintf(s, ";3");
+	if (SCTUI_UNDERSCORE & attr)
+		s += sprintf(s, ";4");
+	if (SCTUI_BLINK & attr)
+		s += sprintf(s, ";5");
+	if (SCTUI_REVERSE & attr)
+		s += sprintf(s, ";7");
+
 	if (SCTUI_BG(attr))
-		s += sprintf(s, ";%d", 40 + (attr & 0xf0));
+		s += sprintf(s, ";%d", 40 + ((attr & 0x70) >> 4));
 	if (SCTUI_FG(attr))
-		s += sprintf(s, ";%d", 30 + (attr & 0x0f));
+		s += sprintf(s, ";%d", 30 + (attr & 0x07));
 	s += sprintf(s, ESC_SGR_END);
 	return global_sctui.cbuf;
 }
@@ -174,7 +206,6 @@ void
 sctui_fini(void)
 {
 	assert(global_sctui.init);
-	write(STDOUT_FILENO, ESC_CLOSE_ALT_SCREEN, 8);
 	tcsetattr(STDIN_FILENO, TCSAFLUSH, &global_sctui.orig);
 }
 
@@ -204,12 +235,6 @@ sctui_init(void)
 	sctui_update();
 	global_sctui.cx = global_sctui.cy = 0;
 	global_sctui.bufp = 0;
-	write(STDOUT_FILENO,
-			ESC_OPEN_ALT_SCREEN
-			ESC_CLEAR_SCREEN
-			ESC_MOVE(1,1),
-			strlen(ESC_CLEAR_SCREEN)
-			+ 14);
 	global_sctui.init = 1;
 }
 
@@ -252,6 +277,21 @@ sctui_update(void)
 	}
 	global_sctui.w = ws.ws_col ? ws.ws_col : 80;
 	global_sctui.h = ws.ws_row ? ws.ws_row : 24;
+}
+
+void
+sctui_close_alt_screen(void)
+{
+	sctui_out(ESC_CLOSE_ALT_SCREEN, 0);
+}
+
+void
+sctui_open_alt_screen(void)
+{
+	sctui_out(ESC_OPEN_ALT_SCREEN
+			ESC_CLEAR_SCREEN
+			ESC_MOVE(1,1),
+			0);
 }
 
 #endif /* SCTUI_IMPL */

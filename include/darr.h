@@ -4,6 +4,7 @@
 #ifndef UTILSH_DARR_H
 #define UTILSH_DARR_H
 #include <stddef.h>
+#include <string.h>
 
 #ifndef UTILSH_DARR_REALLOC
 #define UTILSH_DARR_REALLOC realloc
@@ -19,7 +20,7 @@
 #define darr_append(DARR, ELEM) \
 	do { \
 		darr_expand(DARR); \
-		(DARR)->e[(DARR)->n - 1] = (ELEM); \
+		darr_last(DARR) = (ELEM); \
 	} while (0)
 
 #define darr_expand(DARR) \
@@ -29,6 +30,25 @@
 	do { \
 		(DARR)->n = 0; \
 		(DARR)->e = NULL; \
+	} while (0)
+
+#define darr_last(DARR) ((DARR)->e[(DARR)->n - 1])
+
+#define darr_reduce(DARR) \
+	do { \
+		if ((DARR)->n <= 0) \
+			break; \
+		darr_resize((DARR), (DARR)->n - 1); \
+	} while (0)
+
+#define darr_remove(DARR, POS) \
+	do { \
+		if ((DARR)->n <= 0) \
+			break; \
+		memmove((DARR)->e + (POS), \
+				(DARR)->e + (POS) + 1, \
+				(DARR)->n - (POS)); \
+		darr_resize((DARR), (DARR)->n - 1); \
 	} while (0)
 
 #define darr_resize(DARR, N) \
