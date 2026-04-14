@@ -19,7 +19,7 @@ sys_paste_cmd()
 static const int sel_attr =
 		SCTUI_SET_FG(SCTUI_BLACK) |
 		SCTUI_SET_BG(SCTUI_BLUE);
-static const int bar_attr = SCTUI_SET_BG(SCTUI_BLUE);
+static const int bar_attr = SCTUI_REVERSE;
 
 static const char *tab_render = "        ";
 static const char *win_gap_chr[] = {
@@ -92,11 +92,10 @@ static const struct key cmd_keys[] = {
 };
 
 static struct cmd cmds[] = {
-	/* cmd       alias   func       */
-	// {"buffer",   "b",    cmd_buffer  },
-	{"buffers",  "bs",   cmd_buffers },
-	{"edit",     "e",    cmd_edit    },
-	{"write",    "w",    cmd_write   },
-	{"quit",     "q",    cmd_quit    },
-	{NULL,       NULL,   NULL        }
+	/* cmd       alias   func      */
+	{"buffer",   "b",    cmd_buffer },
+	{"edit",     "e",    cmd_edit   },
+	{"write",    "w",    cmd_write  },
+	{"quit",     "q",    cmd_quit   },
+	{NULL,       NULL,   NULL       }
 };

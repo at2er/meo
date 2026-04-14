@@ -1318,15 +1318,13 @@ split_win(const union arg *arg)
 		win->w = ctab->w->w / 2;
 		win->h = ctab->w->h;
 		ctab->w->w = win->w + ctab->w->w % 2;
-		win->x = ctab->w->x + ctab->w->w + 1;
-		win->w -= 1;
+		win->x = ctab->w->x + ctab->w->w;
 		break;
 	case SPLIT_VER:
 		win->w = ctab->w->w;
 		win->h = ctab->w->h / 2;
 		ctab->w->h = win->h + ctab->w->h % 2;
-		win->y = ctab->w->y + ctab->w->h + 1;
-		win->h -= 1;
+		win->y = ctab->w->y + ctab->w->h;
 		break;
 	default:
 		die("unreachable");
@@ -1363,11 +1361,22 @@ yank(const union arg *arg)
 
 /* command functions */
 void
-cmd_buffers(int argc, const char *argv[])
+cmd_buffer(int argc, const char *argv[])
 {
 	struct fbuf *fb;
+	int idx, width;
 	struct line *l;
-	int width;
+
+	if (argc > 1 && argv[1]) {
+		if ((idx = atoi(argv[1])) > fbs.n - 1)
+			return;
+		if (idx < 0)
+			return;
+		fb = fbs.e[idx];
+		fb->pos.fb = fb;
+		set_rowcol(&fb->pos);
+		return;
+	}
 
 	split_win(&ARG(.i = SPLIT_VER));
 
@@ -1471,7 +1480,7 @@ cmd_quit(int argc, const char *argv[])
 		ctab->w->w += w->w;
 		break;
 	case SPLIT_VER:
-		ctab->w->h += w->h;
+		ctab->w->h += w->h + 1;
 		break;
 	}
 	refreshw(ctab->w);
