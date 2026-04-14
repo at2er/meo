@@ -1199,7 +1199,8 @@ void
 sel(const union arg *arg)
 {
 	int beg = MIN(SEL_MARKER.row, ctab->w->p.row),
-	    end = MAX(SEL_MARKER.row, ctab->w->p.row);
+	    end = MAX(SEL_MARKER.row, ctab->w->p.row),
+	    beg_c, end_c;
 	struct line *l;
 	struct marker *beg_marker, *end_marker;
 
@@ -1218,26 +1219,26 @@ sel(const union arg *arg)
 
 	darr_resize(&cursors, end - beg + 1);
 	cursor = 0;
-	end = end - beg;
-	beg = 0;
+	beg_c = 0;
+	end_c = end - beg;
 
 	if (SEL_MARKER.row < ctab->w->p.row) {
 		beg_marker = &SEL_MARKER;
 		end_marker = &ctab->w->p;
-		cursor = end;
+		cursor = end_c;
 	} else {
 		beg_marker = &ctab->w->p;
 		end_marker = &SEL_MARKER;
 	}
 
-	cursors.e[beg].row = beg_marker->row;
-	cursors.e[beg].col = beg_marker->col;
-	cursors.e[beg].sel = beg_marker->l->s.len - beg_marker->col;
-	cursors.e[beg].l   = beg_marker->l;
-	cursors.e[end].row = end_marker->row;
-	cursors.e[end].col = 0;
-	cursors.e[end].sel = end_marker->col;
-	cursors.e[end].l   = end_marker->l;
+	cursors.e[beg_c].row = beg_marker->row;
+	cursors.e[beg_c].col = beg_marker->col;
+	cursors.e[beg_c].sel = beg_marker->l->s.len - beg_marker->col;
+	cursors.e[beg_c].l   = beg_marker->l;
+	cursors.e[end_c].row = end_marker->row;
+	cursors.e[end_c].col = 0;
+	cursors.e[end_c].sel = end_marker->col;
+	cursors.e[end_c].l   = end_marker->l;
 
 	l = lineof(beg_marker->l->link.nex);
 	for (int i = beg + 1, j = 1; l && i < end; i++, j++) {
