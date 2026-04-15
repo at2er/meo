@@ -22,9 +22,6 @@ static const int sel_attr =
 static const int bar_attr = SCTUI_REVERSE;
 
 static const char *tab_render = "        ";
-static const char *win_gap_chr[] = {
-	"─", "│", "┤", "├", "┬", "┴", "┼"
-};
 
 static const char *mode_str[] = {
 	[MODE_NOR]    = NULL,
@@ -95,6 +92,7 @@ static struct cmd cmds[] = {
 	/* cmd       alias   func      */
 	{"buffer",   "b",    cmd_buffer },
 	{"edit",     "e",    cmd_edit   },
+	{"marks",    "ms",   cmd_marks  },
 	{"write",    "w",    cmd_write  },
 	{"quit",     "q",    cmd_quit   },
 	{NULL,       NULL,   NULL       }

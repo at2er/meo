@@ -42,6 +42,7 @@ static const struct key *get_keys_table(void);
 static struct line *get_line_nex(struct line *beg, int step);
 static struct line *get_line_prv(struct line *beg, int step);
 static struct marker *get_marker(int k);
+static char get_marker_chr(int idx);
 static char **get_reg(int k);
 static void get_rowcol(struct marker *m);
 static int get_rx(struct line *l, int col);
@@ -53,6 +54,7 @@ static void keypress(int k);
 static int match(const char *str);
 static int mode_can_insert(void);
 static void refreshl(struct win *w, struct line *l);
+static void remove_fbuf(struct fbuf *fb);
 static void remove_line(struct fbuf *fb, struct line *l);
 static void render_line(const struct win *w, struct line *l);
 static int request_key(void);
@@ -103,9 +105,9 @@ static struct tab *ctab;
 
 static struct line *has_sel;
 
-/* numbers + lowers + suppers + '\'' */
-static struct marker markers[10 + 52 + 1];
-#define SEL_MARKER markers[10 + 52]
+/* numbers + lowers + '\'' */
+static struct marker markers[10 + 26 + 1];
+#define SEL_MARKER markers[10 + 26]
 
 static struct line *matched;
 static regmatch_t matches[MAX_MACHES];
@@ -299,15 +301,26 @@ get_marker(int k)
 	if (k >= '0' && k <= '9') {
 		k -= '0';
 	} else if (k >= 'a' && k <= 'z') {
-		k = k - 'a' + '9';
-	} else if (k >= 'A' && k <= 'Z') {
-		k = k - 'A' + '9' + 26;
+		k = k - 'a' + 10;
 	} else if (k == '\'') {
 		k = &SEL_MARKER - markers;
 	} else {
 		return NULL;
 	}
 	return &markers[k];
+}
+
+char
+get_marker_chr(int idx)
+{
+	if (idx >= 0 && idx <= 9) {
+		idx += '0';
+	} else if (idx >= 10 && idx <= 26) {
+		idx = idx - 10 + 'a';
+	} else if (idx == &SEL_MARKER - markers) {
+		idx = '\'';
+	}
+	return idx;
 }
 
 char **
@@ -546,6 +559,26 @@ refreshl(struct win *w, struct line *l)
 }
 
 void
+remove_fbuf(struct fbuf *fb)
+{
+	for (int i = 0; i < fbs.n; i++) {
+		if (fbs.e[i] == fb) {
+			darr_remove(&fbs, i);
+			goto clean;
+		}
+	}
+	return;
+
+clean:
+	list_for_each(struct line, l, fb->lines.beg, nex, link) {
+		str_free(&l->s);
+		free(l);
+	}
+
+	free(fb);
+}
+
+void
 remove_line(struct fbuf *fb, struct line *l)
 {
 	fb->ldirty = 1;
@@ -751,7 +784,10 @@ set_child(void)
 void
 set_col(struct win *w, int col)
 {
-	ctab->w->p.col = align(col, 0, ctab->w->p.l->s.len - 1);
+	int max = 0;
+	if (ctab->w->p.l)
+		max = ctab->w->p.l->s.len - 1;
+	ctab->w->p.col = align(col, 0, max);
 	ctab->w->p.fb->pos.col = ctab->w->p.col;
 	refreshw(ctab->w);
 }
@@ -1444,16 +1480,50 @@ setwin:
 }
 
 void
+cmd_marks(int argc, const char *argv[])
+{
+	struct fbuf *fb;
+	struct line *l;
+
+	split_win(&ARG(.i = SPLIT_VER));
+
+	fb = tmp_fbuf();
+
+	/* tmp_fbuf will append the [fb] to [fbs], so don't handle it */
+	for (int i = 0; i < (int)LENGTH(markers); i++, fb->nline++) {
+		if (!markers[i].fb) {
+			fb->nline--;
+			continue;
+		}
+		l = ecalloc(1, sizeof(*l));
+		str_empty(&l->s);
+		estr_expand_siz(&l->s, strlen(markers[i].fb->path) + 64);
+		l->s.len = snprintf(l->s.s, l->s.siz, "%c \"%s\":%d,%d\n",
+				get_marker_chr(i),
+				markers[i].fb->path,
+				markers[i].row, markers[i].col);
+		list_insert(&fb->lines, fb->lines.end, &l->link);
+	}
+
+	set_rowcol(&fb->pos);
+
+	if (fb->nline == 0)
+		cmd_quit(0, NULL);
+}
+
+void
 cmd_write(int argc, const char *argv[])
 {
 	FILE *fp;
+	const char *path;
 
-	if (argc <= 1 || !argv[1]) {
-		if (!(fp = fopen(ctab->w->p.fb->path, "w")))
-			return;
-	} else {
-		fp = fopen(argv[1], "w");
-	}
+	if (argc <= 1 || !argv[1])
+		path = ctab->w->p.fb->path;
+	else
+		path = argv[1];
+
+	if (!(fp = fopen(path, "w")))
+		return;
 
 	list_for_each(struct line, l, ctab->w->p.fb->lines.beg, tmp, link)
 		fputs(l->s.s, fp);
@@ -1480,7 +1550,7 @@ cmd_quit(int argc, const char *argv[])
 		ctab->w->w += w->w;
 		break;
 	case SPLIT_VER:
-		ctab->w->h += w->h + 1;
+		ctab->w->h += w->h;
 		break;
 	}
 	refreshw(ctab->w);
@@ -1504,19 +1574,7 @@ cmd_quit(int argc, const char *argv[])
 	if (using > 1)
 		return;
 
-	for (int i = 0; i < fbs.n; i++) {
-		if (fbs.e[i] == fb) {
-			darr_remove(&fbs, i);
-			break;
-		}
-	}
-
-	list_for_each(struct line, l, fb->lines.beg, nex, link) {
-		str_free(&l->s);
-		free(l);
-	}
-
-	free(fb);
+	remove_fbuf(fb);
 }
 
 int

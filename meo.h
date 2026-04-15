@@ -93,5 +93,6 @@ static void yank(const union arg *arg);
 /* command functions */
 static void cmd_buffer(int argc, const char *argv[]);
 static void cmd_edit(int argc, const char *argv[]);
+static void cmd_marks(int argc, const char *argv[]);
 static void cmd_write(int argc, const char *argv[]);
 static void cmd_quit(int argc, const char *argv[]);
