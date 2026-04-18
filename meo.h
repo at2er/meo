@@ -59,12 +59,12 @@ struct tab {
 };
 
 struct win {
+	struct sctui_win w;
 	struct line *draw;
 	struct marker p;
 	struct win *prv;
 	unsigned int refresh:1,
 	             split:1; /* 0:hor 1:ver */
-	int x, y, w, h;
 };
 
 /* key functions */

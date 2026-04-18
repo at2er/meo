@@ -56,7 +56,7 @@ static int mode_can_insert(void);
 static void refreshl(struct win *w, struct line *l);
 static void remove_fbuf(struct fbuf *fb);
 static void remove_line(struct fbuf *fb, struct line *l);
-static void render_line(const struct win *w, struct line *l);
+static void render_line(struct line *l);
 static int request_key(void);
 static void ruler(void);
 static int search_nex(void);
@@ -144,13 +144,15 @@ draw(void)
 		draw_win(ctab->wins.e[i]);
 
 	ruler();
-	sctui_out(sctui_attr_on(bar_attr), 0);
+	sctui_set_attr(&bar.w, 0, 0, bar.w.w, bar_attr);
 	draw_win(&bar);
-	sctui_out(sctui_attr_off(), 0);
+
+	sctui_commit_wins();
 
 	if (has_sel)
 		draw_sel();
-	sctui_move(get_rx(ctab->w->p.l, ctab->w->p.col),
+	sctui_move(&ctab->w->w,
+			get_rx(ctab->w->p.l, ctab->w->p.col),
 			get_ry(ctab->w->p.row));
 
 	sctui_commit();
@@ -168,8 +170,12 @@ draw_sel(void)
 			continue;
 		rx = get_rx(cursors.e[i].l, cursors.e[i].col);
 		ry = get_ry(cursors.e[i].row);
-		len = get_rx(cursors.e[i].l, cursors.e[i].col + cursors.e[i].sel) - rx;
-		sctui_text(rx, ry, cursors.e[i].l->r + rx, MIN(len, ctab->w->w));
+		len = get_rx(cursors.e[i].l,
+				cursors.e[i].col + cursors.e[i].sel)
+			- rx;
+		sctui_text(NULL, rx + ctab->w->w.x, ry + ctab->w->w.y,
+				cursors.e[i].l->r + rx,
+				MIN(len, ctab->w->w.w));
 	}
 
 	sctui_out(sctui_attr_off(), 0);
@@ -184,16 +190,11 @@ draw_win(struct win *w)
 		return;
 
 	list_for_each(struct line, l, &w->draw->link, tmp, link) {
-		if (i >= w->h)
+		if (i >= w->w.h)
 			break;
-		render_line(w, l);
-		sctui_text(w->x, w->y + i, l->r, w->w);
+		render_line(l);
+		sctui_text(&w->w, 0, i, l->r, 0);
 		i++;
-	}
-
-	for (; i < w->h; i++) {
-		sctui_fill_space(sbuf, 0, w->w);
-		sctui_text(w->x, w->y + i, sbuf, w->w);
 	}
 
 	w->refresh = 0;
@@ -232,8 +233,6 @@ empty_line(void)
 void
 fini(void)
 {
-	sctui_close_alt_screen();
-	sctui_commit();
 	sctui_fini();
 }
 
@@ -358,13 +357,13 @@ get_rx(struct line *l, int col)
 			break;
 		}
 	}
-	return ctab->w->x + rx;
+	return rx;
 }
 
 int
 get_ry(int row)
 {
-	return ctab->w->y + row - ctab->w->p.rowoff;
+	return row - ctab->w->p.rowoff;
 }
 
 void
@@ -386,8 +385,10 @@ init(void)
 	darr_init(&ctab->wins);
 	darr_append(&ctab->wins, ctab->w);
 
-	ctab->w->w = global_sctui.w;
-	ctab->w->h = global_sctui.h - 1;
+	sctui_win(&ctab->w->w);
+	sctui_resize_win(&ctab->w->w,
+			global_sctui.w,
+			global_sctui.h - 1);
 
 	l = empty_line();
 	list_init(&rulerbuf.lines);
@@ -398,14 +399,14 @@ init(void)
 	list_insert(&cmdbuf.lines, cmdbuf.lines.end, &l->link);
 
 	memset(&bar, 0, sizeof(bar));
-	bar.x = 0;
-	bar.y = global_sctui.h - 1;
-	bar.w = global_sctui.w;
-	bar.h = 1;
 	bar.p.fb = &rulerbuf;
 	bar.p.fb->nline = 1;
 	bar.p.l = bar.draw = lineof(bar.p.fb->lines.beg);
 	refreshw(&bar);
+
+	sctui_win(&bar.w);
+	sctui_move_win(&bar.w, 0, global_sctui.h - 1);
+	sctui_resize_win(&bar.w, global_sctui.w, 1);
 
 	darr_init(&cursors);
 	darr_expand(&cursors);
@@ -588,7 +589,7 @@ remove_line(struct fbuf *fb, struct line *l)
 }
 
 void
-render_line(const struct win *w, struct line *l)
+render_line(struct line *l)
 {
 	int p = 0, t;
 
@@ -800,8 +801,8 @@ set_row(struct win *w, int row)
 	w->p.row = align(row, 0, w->p.fb->nline - 1);
 	if (w->p.row <= w->p.rowoff)
 		w->p.rowoff = w->p.row;
-	else if (w->p.row >= w->p.rowoff + w->h)
-		w->p.rowoff = w->p.row - w->h + 1;
+	else if (w->p.row >= w->p.rowoff + w->w.h)
+		w->p.rowoff = w->p.row - w->w.h + 1;
 	w->p.fb->pos.row = w->p.row;
 	w->p.fb->pos.rowoff = w->p.rowoff;
 
@@ -1343,28 +1344,38 @@ sel_word(const union arg *arg)
 void
 split_win(const union arg *arg)
 {
+	int pw, ph;
 	struct win *win;
 
 	win = ecalloc(1, sizeof(*win));
 	darr_append(&ctab->wins, win);
 	memcpy(win, ctab->w, sizeof(*win));
 
+	pw = ctab->w->w.w;
+	ph = ctab->w->w.h;
+
 	switch (arg->i) {
 	case SPLIT_HOR:
-		win->w = ctab->w->w / 2;
-		win->h = ctab->w->h;
-		ctab->w->w = win->w + ctab->w->w % 2;
-		win->x = ctab->w->x + ctab->w->w;
+		win->w.w = pw / 2;
+		win->w.h = ph;
+		pw = win->w.w + pw % 2;
+		win->w.x = ctab->w->w.x + pw;
 		break;
 	case SPLIT_VER:
-		win->w = ctab->w->w;
-		win->h = ctab->w->h / 2;
-		ctab->w->h = win->h + ctab->w->h % 2;
-		win->y = ctab->w->y + ctab->w->h;
+		win->w.w = pw;
+		win->w.h = ph / 2;
+		ph = win->w.h + ph % 2;
+		win->w.y = ctab->w->w.y + ph;
 		break;
 	default:
-		die("unreachable");
+		die("unreawin->w.hable");
 	}
+
+	sctui_win(&win->w);
+	sctui_move_win(&win->w, win->w.x, win->w.y);
+	sctui_resize_win(&win->w, win->w.w, win->w.h);
+
+	sctui_resize_win(&ctab->w->w, pw, ph);
 
 	set_row(win, win->p.row);
 	set_row(ctab->w, ctab->w->p.row);
@@ -1547,14 +1558,19 @@ cmd_quit(int argc, const char *argv[])
 	ctab->w = ctab->w->prv;
 	switch (w->split) {
 	case SPLIT_HOR:
-		ctab->w->w += w->w;
+		sctui_resize_win(&ctab->w->w,
+				ctab->w->w.w + w->w.w,
+				ctab->w->w.h);
 		break;
 	case SPLIT_VER:
-		ctab->w->h += w->h;
+		sctui_resize_win(&ctab->w->w,
+				ctab->w->w.w,
+				ctab->w->w.h + w->w.h);
 		break;
 	}
 	refreshw(ctab->w);
 	fb = w->p.fb;
+	sctui_remove_win(&w->w);
 	free(w);
 	for (int i = 0; i < ctab->wins.n; i++) {
 		if (ctab->wins.e[i] == w) {
