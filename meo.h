@@ -83,6 +83,7 @@ static void sel(const union arg *arg);
 static void sel_line(const union arg *arg);
 static void sel_word(const union arg *arg);
 static void split_win(const union arg *arg);
+static void undo(const union arg *arg);
 static void yank(const union arg *arg);
 
 /* command functions */

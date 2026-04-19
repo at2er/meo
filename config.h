@@ -16,10 +16,8 @@ sys_paste_cmd()
 	return c;
 }
 
-static const int sel_attr =
-		SCTUI_SET_FG(SCTUI_BLACK) |
-		SCTUI_SET_BG(SCTUI_BLUE);
-static const int bar_attr = SCTUI_REVERSE;
+static const int sel_attr = SCTUI_REVERSE;
+static const int bar_attr = 0;
 
 static const char *tab_render = "        ";
 
@@ -56,6 +54,7 @@ static const struct key normal_keys[] = {
 	{"p",    paste,       {.s = "+"   }      },
 	{"P",    paste,       {.s = "+P"  }      },
 	{"q",    cmd,         {.s = "quit"}      },
+	{"u",    undo,        {0}                },
 	{"v",    sel,         {0}                },
 	{"w",    sel_word,    {.i = 1}           },
 	{"y",    yank,        {.i = '+'}         },

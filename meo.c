@@ -36,7 +36,7 @@ struct selection {
 
 static void comp_pattern(const char *p, int len);
 static void draw(void);
-static void draw_line(struct win *w, struct line *l, int row, int col, int len);
+static void draw_line(struct win *w, struct line *l, int row, int beg, int end);
 static void draw_sel(void);
 static void draw_win(struct win *w);
 static void dup_to_reg(int r, const char *s, int len);
@@ -159,10 +159,10 @@ draw(void)
 }
 
 void
-draw_line(struct win *w, struct line *l, int row, int col, int len)
+draw_line(struct win *w, struct line *l, int row, int beg, int end)
 {
-	int rx = get_rx(w, l, col), ry = get_ry(w, row);
-	len = get_rx(w, l, len);
+	int rx = get_rx(w, l, beg), ry = get_ry(w, row),
+	    len = get_rx(w, l, end) - rx;
 	sctui_text(rx, ry, l->r + rx, MIN(len, w->w));
 }
 
@@ -177,7 +177,8 @@ draw_sel(void)
 	get_sel(&sel);
 	l = sel.begm->l;
 	if (sel.first_len)
-		draw_line(ctab->w, l, sel.begm->row, sel.first, sel.first_len);
+		draw_line(ctab->w, l, sel.begm->row, sel.first,
+				 sel.first + sel.first_len);
 
 	l = lineof(l->link.nex);
 	for (int i = sel.begm->row + 1; i < sel.endm->row; i++) {
@@ -717,7 +718,7 @@ search_prv(void)
 			return 1;
 		if (ctab->w->p.row <= 0)
 			break;
-		move_row(&ARG(.i = 1));
+		move_row(&ARG(.i = -1));
 	} while (1);
 
 	return 0;
@@ -1074,6 +1075,7 @@ delete(const union arg *arg)
 		l = nex;
 	}
 
+	/* wtf */
 	if (sel.last_len) {
 		estr_append_str(&buf, &STR(l->s.s, sel.last_len));
 		if (sel.last_len >= (int)l->s.len) {
@@ -1354,6 +1356,11 @@ split_win(const union arg *arg)
 	win->prv->split = arg->i;
 	ctab->w = win;
 	ctab->w->split = arg->i;
+}
+
+void
+undo(const union arg *arg)
+{
 }
 
 void
