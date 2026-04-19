@@ -29,8 +29,14 @@
 #define lineof(LINK) list_container_of(LINK, struct line, link)
 #define refreshw(WREF) ((WREF)->refresh = 1)
 
+struct selection {
+	struct marker *begm, *endm;
+	int first, first_len, last_len;
+};
+
 static void comp_pattern(const char *p, int len);
 static void draw(void);
+static void draw_line(struct win *w, struct line *l, int row, int col, int len);
 static void draw_sel(void);
 static void draw_win(struct win *w);
 static void dup_to_reg(int r, const char *s, int len);
@@ -45,11 +51,11 @@ static struct marker *get_marker(int k);
 static char get_marker_chr(int idx);
 static char **get_reg(int k);
 static void get_rowcol(struct marker *m);
-static int get_rx(struct line *l, int col);
-static int get_ry(int row);
+static int get_rx(struct win *w, struct line *l, int col);
+static int get_ry(struct win *w, int row);
+static void get_sel(struct selection *sel);
 static void init(void);
-static void jump_done(void);
-static void jump_start(void);
+static void jumping(void);
 static void keypress(int k);
 static int match(const char *str);
 static int mode_can_insert(void);
@@ -96,10 +102,6 @@ static struct fbuf rulerbuf;
 static char *regs[1];
 
 /* state */
-typedef darr(struct cursor) cursor_arr;
-static int        cursor;
-static cursor_arr cursors;
-
 static int         cmode = MODE_NOR;
 static struct tab *ctab;
 
@@ -150,27 +152,43 @@ draw(void)
 
 	if (has_sel)
 		draw_sel();
-	sctui_move(get_rx(ctab->w->p.l, ctab->w->p.col),
-			get_ry(ctab->w->p.row));
+	sctui_move(get_rx(ctab->w, ctab->w->p.l, ctab->w->p.col),
+			get_ry(ctab->w, ctab->w->p.row));
 
 	sctui_commit();
 }
 
 void
+draw_line(struct win *w, struct line *l, int row, int col, int len)
+{
+	int rx = get_rx(w, l, col), ry = get_ry(w, row);
+	len = get_rx(w, l, len);
+	sctui_text(rx, ry, l->r + rx, MIN(len, w->w));
+}
+
+void
 draw_sel(void)
 {
-	int rx, ry, len;
+	struct line *l;
+	struct selection sel;
 
 	sctui_out(sctui_attr_on(sel_attr), 0);
 
-	for (int i = 0; i < cursors.n; i++) {
-		if (!cursors.e[i].l || !cursors.e[i].sel)
+	get_sel(&sel);
+	l = sel.begm->l;
+	if (sel.first_len)
+		draw_line(ctab->w, l, sel.begm->row, sel.first, sel.first_len);
+
+	l = lineof(l->link.nex);
+	for (int i = sel.begm->row + 1; i < sel.endm->row; i++) {
+		if (l->s.len <= 0)
 			continue;
-		rx = get_rx(cursors.e[i].l, cursors.e[i].col);
-		ry = get_ry(cursors.e[i].row);
-		len = get_rx(cursors.e[i].l, cursors.e[i].col + cursors.e[i].sel) - rx;
-		sctui_text(rx, ry, cursors.e[i].l->r + rx, MIN(len, ctab->w->w));
+		draw_line(ctab->w, l, i, 0, l->s.len);
+		l = lineof(l->link.nex);
 	}
+
+	if (sel.last_len)
+		draw_line(ctab->w, l, sel.endm->row, 0, sel.last_len);
 
 	sctui_out(sctui_attr_off(), 0);
 }
@@ -187,7 +205,7 @@ draw_win(struct win *w)
 		if (i >= w->h)
 			break;
 		render_line(w, l);
-		sctui_text(w->x, w->y + i, l->r, w->w);
+		draw_line(w, l, w->p.rowoff + i, 0, w->w);
 		i++;
 	}
 
@@ -345,11 +363,11 @@ get_rowcol(struct marker *m)
 }
 
 int
-get_rx(struct line *l, int col)
+get_rx(struct win *w, struct line *l, int col)
 {
 	int rx = 0;
 	for (int i = 0; i < col; i++) {
-		switch (ctab->w->p.l->s.s[i]) {
+		switch (l->s.s[i]) {
 		case '\t':
 			rx += strlen(tab_render);
 			break;
@@ -358,13 +376,36 @@ get_rx(struct line *l, int col)
 			break;
 		}
 	}
-	return ctab->w->x + rx;
+	return w->x + rx;
 }
 
 int
-get_ry(int row)
+get_ry(struct win *w, int row)
 {
-	return ctab->w->y + row - ctab->w->p.rowoff;
+	return w->y + row - w->p.rowoff;
+}
+
+void
+get_sel(struct selection *sel)
+{
+	if (ctab->w->p.row <= SEL_MARKER.row) {
+		sel->begm = &ctab->w->p;
+		sel->endm = &SEL_MARKER;
+	} else {
+		sel->begm = &SEL_MARKER;
+		sel->endm = &ctab->w->p;
+	}
+
+	if (ctab->w->p.row != SEL_MARKER.row) {
+		sel->first = sel->begm->col;
+		sel->first_len = sel->begm->l->s.len - sel->first;
+		sel->last_len = sel->endm->col;
+	} else {
+		sel->first = MIN(sel->begm->col, sel->endm->col);
+		sel->first_len = MAX(sel->begm->col, sel->endm->col)
+			- sel->first;
+		sel->last_len = 0;
+	}
 }
 
 void
@@ -407,11 +448,6 @@ init(void)
 	bar.p.l = bar.draw = lineof(bar.p.fb->lines.beg);
 	refreshw(&bar);
 
-	darr_init(&cursors);
-	darr_expand(&cursors);
-	memset(cursors.e, 0, sizeof(*cursors.e));
-	cursor = 0;
-
 	if (!entry)
 		cmd_edit(0, NULL);
 	else
@@ -419,24 +455,9 @@ init(void)
 }
 
 void
-jump_done(void)
-{
-	if (ctab->w->p.col > cursors.e[cursor].col) {
-		cursors.e[cursor].sel = ctab->w->p.col - cursors.e[cursor].col;
-	} else {
-		cursors.e[cursor].sel = cursors.e[cursor].col - ctab->w->p.col;
-		set_col(ctab->w, ctab->w->p.col);
-		cursors.e[cursor].col = ctab->w->p.col;
-	}
-}
-
-void
-jump_start(void)
+jumping(void)
 {
 	mark(&ARG(.i = '\''));
-	cursors.e[cursor].row = ctab->w->p.row;
-	cursors.e[cursor].col = ctab->w->p.col;
-	cursors.e[cursor].l = ctab->w->p.l;
 	has_sel = ctab->w->p.l;
 }
 
@@ -582,6 +603,7 @@ void
 remove_line(struct fbuf *fb, struct line *l)
 {
 	fb->ldirty = 1;
+	fb->nline--;
 	list_remove(&fb->lines, &l->link);
 	str_free(&l->s);
 	free(l);
@@ -1018,8 +1040,9 @@ void
 delete(const union arg *arg)
 {
 	struct str buf;
-	struct cursor *c;
-	int len, sel;
+	struct line *l, *nex;
+	int beg, end, len;
+	struct selection sel;
 
 	if (!has_sel) {
 		if (ctab->w->p.col >= (int)ctab->w->p.l->s.len - 1)
@@ -1032,33 +1055,48 @@ delete(const union arg *arg)
 
 	str_empty(&buf);
 
-	c = cursors.e;
-	set_row(ctab->w, c->row);
-	/* FIXME: don't use 'ctab->w->p.l',
-	   the 'c->l' maybe not continuous. */
-	for (int i = 0, n = cursors.n, concat = 0; i < n;
-			i++, c++, concat = 0) {
-		len = ctab->w->p.l->s.len;
-		sel = c->sel;
-		if (!c->l || sel == 0)
+	get_sel(&sel);
+	beg = sel.begm->row;
+	end = sel.endm->row;
+	l = sel.begm->l;
+	set_row(ctab->w, sel.begm->row);
+
+	if (sel.first_len)
+		estr_append_str(&buf, &STR(l->s.s + sel.first, sel.first_len));
+
+	l = lineof(l->link.nex);
+	for (int i = beg + 1; i < end; i++) {
+		if (l->s.len <= 0)
 			continue;
-		if (c->col + sel >= len) {
-			sel -= 1;
-			concat = 1;
-		}
-		estr_append_str(&buf, &STR(ctab->w->p.l->s.s + c->col, sel));
-		estr_append_chr(&buf, '\n');
-		estr_remove(&ctab->w->p.l->s, c->col, sel);
-		if (concat) {
-			cursors.e[i + 1].col += ctab->w->p.l->s.len - 1;
-			concat_line(&ARG(0));
-			cursors.e[i + 1].l = ctab->w->p.l;
-		}
-		refreshl(ctab->w, ctab->w->p.l);
+		estr_append_str(&buf, &l->s);
+		nex = lineof(l->link.nex);
+		remove_line(ctab->w->p.fb, l);
+		l = nex;
 	}
 
-	set_row(ctab->w, cursors.e[0].row);
-	set_col(ctab->w, cursors.e[0].col);
+	if (sel.last_len) {
+		estr_append_str(&buf, &STR(l->s.s, sel.last_len));
+		if (sel.last_len >= (int)l->s.len) {
+			remove_line(ctab->w->p.fb, l);
+		} else {
+			estr_remove(&l->s, 0, sel.last_len);
+			refreshl(ctab->w, l);
+		}
+	}
+
+	l = ctab->w->p.l;
+
+	if (sel.first_len) {
+		len = sel.first_len;
+		if (sel.first + len >= (int)l->s.len)
+			len--;
+		estr_remove(&l->s, sel.first, len);
+		refreshl(ctab->w, l);
+		if (len != sel.first_len)
+			concat_line(&ARG(0));
+	}
+
+	set_col(ctab->w, sel.first);
 
 	dup_to_reg('+', buf.s, buf.len);
 	str_free(&buf);
@@ -1074,9 +1112,8 @@ goto_beg(const union arg *arg)
 		set_row(ctab->w, 0);
 		break;
 	case GOTO_IN_LINE:
-		jump_start();
+		jumping();
 		set_col(ctab->w, 0);
-		jump_done();
 		break;
 	}
 }
@@ -1089,9 +1126,8 @@ goto_end(const union arg *arg)
 		set_row(ctab->w, ctab->w->p.fb->nline - 1);
 		break;
 	case GOTO_IN_LINE:
-		jump_start();
+		jumping();
 		set_col(ctab->w, ctab->w->p.l->s.len - 1);
-		jump_done();
 		break;
 	}
 }
@@ -1195,7 +1231,6 @@ void
 move_row(const union arg *arg)
 {
 	set_row(ctab->w, ctab->w->p.row + arg->i);
-	cursors.e[cursor].sel = 0;
 	has_sel = NULL;
 }
 
@@ -1234,57 +1269,6 @@ search(const union arg *arg)
 void
 sel(const union arg *arg)
 {
-	int beg = MIN(SEL_MARKER.row, ctab->w->p.row),
-	    end = MAX(SEL_MARKER.row, ctab->w->p.row),
-	    beg_c, end_c;
-	struct line *l;
-	struct marker *beg_marker, *end_marker;
-
-	if (SEL_MARKER.row == ctab->w->p.row) {
-		beg = MIN(SEL_MARKER.col, ctab->w->p.col);
-		end = MAX(SEL_MARKER.col, ctab->w->p.col);
-		darr_resize(&cursors, 1);
-		cursor = 0;
-		cursors.e[cursor].row = ctab->w->p.row;
-		cursors.e[cursor].col = beg;
-		cursors.e[cursor].sel = end - beg;
-		cursors.e[cursor].l = ctab->w->p.l;
-		has_sel = ctab->w->p.l;
-		return;
-	}
-
-	darr_resize(&cursors, end - beg + 1);
-	cursor = 0;
-	beg_c = 0;
-	end_c = end - beg;
-
-	if (SEL_MARKER.row < ctab->w->p.row) {
-		beg_marker = &SEL_MARKER;
-		end_marker = &ctab->w->p;
-		cursor = end_c;
-	} else {
-		beg_marker = &ctab->w->p;
-		end_marker = &SEL_MARKER;
-	}
-
-	cursors.e[beg_c].row = beg_marker->row;
-	cursors.e[beg_c].col = beg_marker->col;
-	cursors.e[beg_c].sel = beg_marker->l->s.len - beg_marker->col;
-	cursors.e[beg_c].l   = beg_marker->l;
-	cursors.e[end_c].row = end_marker->row;
-	cursors.e[end_c].col = 0;
-	cursors.e[end_c].sel = end_marker->col;
-	cursors.e[end_c].l   = end_marker->l;
-
-	l = lineof(beg_marker->l->link.nex);
-	for (int i = beg + 1, j = 1; l && i < end; i++, j++) {
-		cursors.e[j].col = 0;
-		cursors.e[j].row = i;
-		cursors.e[j].sel = l->s.len;
-		cursors.e[j].l = l;
-		l = lineof(l->link.nex);
-	}
-
 	has_sel = SEL_MARKER.l;
 }
 
@@ -1293,14 +1277,12 @@ sel_line(const union arg *arg)
 {
 	if (arg->i > 0) {
 		set_col(ctab->w, 0);
-		jump_start();
+		jumping();
 		set_col(ctab->w, ctab->w->p.l->s.len - 1);
-		jump_done();
 	} else {
 		set_col(ctab->w, ctab->w->p.l->s.len - 1);
-		jump_start();
+		jumping();
 		set_col(ctab->w, 0);
-		jump_done();
 	}
 }
 
@@ -1323,11 +1305,10 @@ sel_word(const union arg *arg)
 
 	fake.col = beg - l->s.s;
 	set_rowcol(&fake);
-	jump_start();
+	jumping();
 
 	fake.col = end - l->s.s;
 	set_rowcol(&fake);
-	jump_done();
 
 	refreshw(ctab->w);
 
@@ -1379,18 +1360,26 @@ void
 yank(const union arg *arg)
 {
 	struct str buf;
-	struct cursor *c = cursors.e;
-	int sel;
+	struct line *l;
+	struct selection sel;
 	str_empty(&buf);
-	for (int i = 0; i < cursors.n; i++, c++) {
-		sel = c->sel;
-		if (!c->l || !sel)
+
+	get_sel(&sel);
+	l = sel.begm->l;
+	if (sel.first_len)
+		estr_append_str(&buf, &STR(l->s.s + sel.first, sel.first_len));
+
+	l = lineof(l->link.nex);
+	for (int i = sel.begm->row + 1; i < sel.endm->row; i++) {
+		if (l->s.len <= 0)
 			continue;
-		if (c->col + sel >= (int)c->l->s.len)
-			sel -= 1;
-		estr_append_str(&buf, &STR(c->l->s.s + c->col, sel));
-		estr_append_chr(&buf, '\n');
+		estr_append_str(&buf, &l->s);
+		l = lineof(l->link.nex);
 	}
+
+	if (sel.last_len)
+		estr_append_str(&buf, &STR(l->s.s, sel.last_len));
+
 	dup_to_reg('+', buf.s, buf.len);
 	str_free(&buf);
 }

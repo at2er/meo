@@ -308,7 +308,7 @@ str_remove(struct str *s, size_t pos, size_t len)
 	if (!s)
 		return NULL;
 	if (len == 0)
-		return NULL;
+		return s;
 	if (pos > s->len)
 		return NULL;
 	s->len -= len;
