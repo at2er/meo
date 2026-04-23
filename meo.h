@@ -7,6 +7,7 @@ enum { MODE_NOR, MODE_INS, MODE_CMD, MODE_SEARCH };
 enum { GOTO_IN_FILE, GOTO_IN_LINE };
 enum { SPLIT_HOR, SPLIT_VER };
 enum { UP, DOWN };
+enum UNDO_TYPE { UNDO_DELETE };
 
 struct fbuf;
 struct win;
@@ -33,9 +34,12 @@ struct fbuf {
 	char path[FILENAME_MAX];
 
 	unsigned int ldirty:1, /* lines dirty */
-	             tmp:1;    /* auto remove after quit */
+	             tmp:1,    /* auto remove after quit */
+	             no_undo:1;
 
 	struct marker pos;
+
+	struct utilsh_list_head undo;
 };
 typedef darr(struct fbuf *) fb_arr;
 
@@ -60,6 +64,13 @@ struct win {
 	unsigned int refresh:1,
 	             split:1; /* 0:hor 1:ver */
 	int x, y, w, h;
+};
+
+struct undo {
+	struct utilsh_list link;
+	struct marker pb, pe; /* begin and end */
+	struct str s;
+	enum UNDO_TYPE type;
 };
 
 /* key functions */

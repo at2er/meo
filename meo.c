@@ -27,6 +27,7 @@
 
 #define ARG(...) (union arg){__VA_ARGS__}
 #define lineof(LINK) list_container_of(LINK, struct line, link)
+#define undoof(LINK) list_container_of(LINK, struct undo, link)
 #define refreshw(WREF) ((WREF)->refresh = 1)
 
 struct selection {
@@ -59,6 +60,7 @@ static void jumping(void);
 static void keypress(int k);
 static int match(const char *str);
 static int mode_can_insert(void);
+static struct undo *new_undo(struct fbuf *fb);
 static void refreshl(struct win *w, struct line *l);
 static void remove_fbuf(struct fbuf *fb);
 static void remove_line(struct fbuf *fb, struct line *l);
@@ -236,6 +238,8 @@ void
 empty_fbuf(struct fbuf *fb)
 {
 	struct line *l = empty_line();
+	list_init(&fb->lines);
+	list_init(&fb->undo);
 	list_insert(&fb->lines, fb->lines.end, &l->link);
 	fb->nline = 1;
 }
@@ -356,11 +360,7 @@ get_reg(int k)
 void
 get_rowcol(struct marker *m)
 {
-	m->fb = ctab->w->p.fb;
-	m->l = ctab->w->p.l;
-	m->row = ctab->w->p.row;
-	m->rowoff = ctab->w->p.rowoff;
-	m->col = ctab->w->p.col;
+	memcpy(m, &ctab->w->p, sizeof(*m));
 }
 
 int
@@ -389,12 +389,20 @@ get_ry(struct win *w, int row)
 void
 get_sel(struct selection *sel)
 {
-	if (ctab->w->p.row <= SEL_MARKER.row) {
+	if (ctab->w->p.row < SEL_MARKER.row) {
 		sel->begm = &ctab->w->p;
 		sel->endm = &SEL_MARKER;
-	} else {
+	} if (ctab->w->p.row > SEL_MARKER.row) {
 		sel->begm = &SEL_MARKER;
 		sel->endm = &ctab->w->p;
+	} else {
+		if (ctab->w->p.col <= SEL_MARKER.col) {
+			sel->begm = &ctab->w->p;
+			sel->endm = &SEL_MARKER;
+		} else {
+			sel->begm = &SEL_MARKER;
+			sel->endm = &ctab->w->p;
+		}
 	}
 
 	if (ctab->w->p.row != SEL_MARKER.row) {
@@ -412,8 +420,6 @@ get_sel(struct selection *sel)
 void
 init(void)
 {
-	struct line *l;
-
 	sctui_init();
 	sctui_open_alt_screen();
 
@@ -431,13 +437,8 @@ init(void)
 	ctab->w->w = global_sctui.w;
 	ctab->w->h = global_sctui.h - 1;
 
-	l = empty_line();
-	list_init(&rulerbuf.lines);
-	list_insert(&rulerbuf.lines, rulerbuf.lines.end, &l->link);
-
-	l = empty_line();
-	list_init(&cmdbuf.lines);
-	list_insert(&cmdbuf.lines, cmdbuf.lines.end, &l->link);
+	empty_fbuf(&rulerbuf);
+	empty_fbuf(&cmdbuf);
 
 	memset(&bar, 0, sizeof(bar));
 	bar.x = 0;
@@ -518,6 +519,26 @@ mode_can_insert(void)
 		return 1;
 	}
 	return 0;
+}
+
+struct undo *
+new_undo(struct fbuf *fb)
+{
+	struct undo *u;
+
+	fb->no_undo = 0;
+
+	if (fb->undo.end && fb->undo.end->nex) {
+		fb->undo.end = fb->undo.end->nex;
+		return undoof(fb->undo.end);
+	}
+
+	if (fb->undo.beg && fb->no_undo)
+		return undoof(fb->undo.beg);
+
+	u = ecalloc(1, sizeof(*u));
+	list_insert(&fb->undo, fb->undo.end, &u->link);
+	return u;
 }
 
 void
@@ -1045,11 +1066,22 @@ delete(const union arg *arg)
 	int beg, end, len;
 	struct selection sel;
 
+	struct undo *u;
+
+	if (!has_sel && ctab->w->p.col >= (int)ctab->w->p.l->s.len - 1) {
+		concat_line(&ARG(0));
+		return;
+	}
+
+	u = new_undo(ctab->w->p.fb);
+	u->type = UNDO_DELETE;
+
 	if (!has_sel) {
-		if (ctab->w->p.col >= (int)ctab->w->p.l->s.len - 1)
-			concat_line(&ARG(0));
-		else
-			estr_remove(&ctab->w->p.l->s, ctab->w->p.col, 1);
+		get_rowcol(&u->pb);
+		get_rowcol(&u->pe);
+		str_empty(&u->s);
+		estr_append_chr(&u->s, ctab->w->p.l->s.s[ctab->w->p.col]);
+		estr_remove(&ctab->w->p.l->s, ctab->w->p.col, 1);
 		refreshl(ctab->w, ctab->w->p.l);
 		return;
 	}
@@ -1057,6 +1089,9 @@ delete(const union arg *arg)
 	str_empty(&buf);
 
 	get_sel(&sel);
+	u->pb = *sel.begm;
+	u->pe = *sel.endm;
+
 	beg = sel.begm->row;
 	end = sel.endm->row;
 	l = sel.begm->l;
@@ -1101,7 +1136,7 @@ delete(const union arg *arg)
 	set_col(ctab->w, sel.first);
 
 	dup_to_reg('+', buf.s, buf.len);
-	str_free(&buf);
+	u->s = buf;
 
 	has_sel = NULL;
 }
@@ -1180,6 +1215,7 @@ insert(const union arg *arg)
 
 	estr_insert_str(&l->s, ctab->w->p.col - s.len, &s);
 	set_col(ctab->w, ctab->w->p.col);
+	has_sel = NULL;
 }
 
 void
@@ -1361,6 +1397,26 @@ split_win(const union arg *arg)
 void
 undo(const union arg *arg)
 {
+	struct fbuf *fb = ctab->w->p.fb;
+	struct undo *u;
+
+	if (fb->no_undo)
+		return;
+
+	u = undoof(fb->undo.end);
+
+	switch (u->type) {
+	case UNDO_DELETE:
+		set_rowcol(&u->pb);
+		insert(&ARG(.s = u->s.s));
+		set_rowcol(&u->pe);
+		break;
+	}
+
+	if (fb->undo.end->prv)
+		fb->undo.end = fb->undo.end->prv;
+	else
+		fb->no_undo = 1;
 }
 
 void
@@ -1449,8 +1505,6 @@ cmd_edit(int argc, const char *argv[])
 	fb = ecalloc(1, sizeof(*fb));
 	darr_append(&fbs, fb);
 
-	list_init(&fb->lines);
-
 	if (argc <= 1) {
 		strcpy(fb->path, "<unnamed>");
 	} else {
@@ -1462,6 +1516,8 @@ cmd_edit(int argc, const char *argv[])
 		goto setwin;
 	}
 
+	list_init(&fb->lines);
+	list_init(&fb->undo);
 	for (nline = 0; fgets(sbuf, BUFSIZ, fp); nline++) {
 		l = ecalloc(1, sizeof(*l));
 		estr_from_cstr(&l->s, sbuf);
