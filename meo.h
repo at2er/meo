@@ -7,7 +7,7 @@ enum { MODE_NOR, MODE_INS, MODE_CMD, MODE_SEARCH };
 enum { GOTO_IN_FILE, GOTO_IN_LINE };
 enum { SPLIT_HOR, SPLIT_VER };
 enum { UP, DOWN };
-enum UNDO_TYPE { UNDO_DELETE };
+enum UNDO_TYPE { UNDO_NO, UNDO_DELETE };
 
 struct fbuf;
 struct win;
@@ -28,14 +28,18 @@ struct marker {
 	int row, rowoff, col;
 };
 
+struct edit {
+	struct marker beg, end; /* range */
+	struct str replace;
+};
+
 struct fbuf {
 	struct utilsh_list_head lines;
 	int nline;
 	char path[FILENAME_MAX];
 
 	unsigned int ldirty:1, /* lines dirty */
-	             tmp:1,    /* auto remove after quit */
-	             no_undo:1;
+	             tmp:1;    /* auto remove after quit */
 
 	struct marker pos;
 
@@ -68,9 +72,7 @@ struct win {
 
 struct undo {
 	struct utilsh_list link;
-	struct marker pb, pe; /* begin and end */
-	struct str s;
-	enum UNDO_TYPE type;
+	struct edit e;
 };
 
 /* key functions */

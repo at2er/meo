@@ -40,7 +40,8 @@ static void draw(void);
 static void draw_line(struct win *w, struct line *l, int row, int beg, int end);
 static void draw_sel(void);
 static void draw_win(struct win *w);
-static void dup_to_reg(int r, const char *s, int len);
+static void dup_to_reg(int r, char *s);
+static struct undo *edit(struct str *orig, struct edit *e);
 static void empty_fbuf(struct fbuf *fb);
 static struct line *empty_line(void);
 static void fini(void);
@@ -51,7 +52,6 @@ static struct line *get_line_prv(struct line *beg, int step);
 static struct marker *get_marker(int k);
 static char get_marker_chr(int idx);
 static char **get_reg(int k);
-static void get_rowcol(struct marker *m);
 static int get_rx(struct win *w, struct line *l, int col);
 static int get_ry(struct win *w, int row);
 static void get_sel(struct selection *sel);
@@ -75,10 +75,10 @@ static void set_bar_buf(struct fbuf *fb);
 static void set_child(void);
 static void set_col(struct win *w, int col);
 static void set_row(struct win *w, int row);
-static void set_rowcol(struct marker *m);
 static void sys_copy(const char *s);
 static char *sys_paste(void);
 static struct fbuf *tmp_fbuf(void);
+static void xgoto_mark(struct marker *m);
 
 static const char *usages[] = {
 "Usage: meo [OPTIONS] [FILE]",
@@ -106,7 +106,6 @@ static char *regs[1];
 /* state */
 static int         cmode = MODE_NOR;
 static struct tab *ctab;
-
 static struct line *has_sel;
 
 /* numbers + lowers + '\'' */
@@ -221,17 +220,106 @@ draw_win(struct win *w)
 }
 
 void
-dup_to_reg(int r, const char *s, int len)
+dup_to_reg(int r, char *s)
 {
 	char **reg = get_reg(r);
 	if (!reg)
 		return;
 	if (*reg)
 		free(*reg);
-	*reg = strndup(s, len);
+	*reg = s;
 
 	if (r == '+')
 		sys_copy(*reg);
+}
+
+struct undo *
+edit(struct str *orig, struct edit *e)
+{
+	struct marker *beg = &e->beg, *end = &e->end;
+	char *c;
+	struct line *l, *nex;
+	int len;
+	struct str s;
+	struct undo *u;
+
+	u = new_undo(ctab->w->p.fb);
+	u->e = *e;
+
+	if (beg->row > end->row
+	|| (beg->row == end->row && beg->col > end->col)) {
+		u->e.beg = e->end;
+		u->e.end = e->beg;
+	}
+
+	beg = &u->e.beg;
+	end = &u->e.end;
+
+	set_row(ctab->w, beg->row);
+	l = ctab->w->p.l;
+
+	if (beg->row == end->row)
+		len = end->col - beg->col;
+	else
+		len = l->s.len - beg->col;
+
+	if (len) {
+		estr_append_str(&u->e.replace, &STR(l->s.s + beg->col, len));
+		estr_remove(&l->s, beg->col, len);
+		refreshl(ctab->w, l);
+	}
+
+	l = lineof(l->link.nex);
+
+	for (int i = beg->row + 1; i < end->row; i++) {
+		if (l->s.len <= 0) {
+			estr_append_chr(&u->e.replace, '\n');
+			continue;
+		}
+		estr_append_str(&u->e.replace, &l->s);
+		nex = lineof(l->link.nex);
+		remove_line(ctab->w->p.fb, l);
+		l = nex;
+	}
+
+	if (beg->row != end->row) {
+		estr_append_str(&u->e.replace, &STR(end->l->s.s, end->col));
+		estr_append_cstr(&beg->l->s, end->l->s.s + end->col);
+		remove_line(ctab->w->p.fb, end->l);
+	}
+
+	if (beg->l->s.s[beg->l->s.len - 1] != '\n')
+		estr_append_chr(&beg->l->s, '\n');
+
+	if (orig)
+		estr_from_str(orig, &u->e.replace);
+
+	set_col(ctab->w, beg->col);
+
+	if (!e->replace.s)
+		return u;
+
+	l = ctab->w->p.l; /* at beg->l */
+	s.s = e->replace.s;
+	s.len = 0;
+	for (c = e->replace.s; *c; c++) {
+		if (*c == '\n') {
+			estr_insert_str(&l->s, ctab->w->p.col - s.len, &s);
+			s.s = c + 1;
+			s.siz = s.len = 0;
+			new_line(&ARG(.s = "dI")); /* keep the text of line */
+			l = ctab->w->p.l;
+			continue;
+		}
+		s.len++;
+		ctab->w->p.col++;
+	}
+	refreshl(ctab->w, l);
+
+	estr_insert_str(&l->s, ctab->w->p.col - s.len, &s);
+	set_col(ctab->w, ctab->w->p.col);
+
+	return u;
 }
 
 void
@@ -355,12 +443,6 @@ get_reg(int k)
 		return NULL;
 	}
 	return &regs[k];
-}
-
-void
-get_rowcol(struct marker *m)
-{
-	memcpy(m, &ctab->w->p, sizeof(*m));
 }
 
 int
@@ -501,7 +583,7 @@ match(const char *str)
 	r = !regexec(pattern, str, MAX_MACHES, matches, 0);
 	if (r) {
 		set_col(ctab->w, matches[0].rm_so);
-		get_rowcol(&SEL_MARKER);
+		SEL_MARKER = ctab->w->p;
 		set_col(ctab->w, matches[0].rm_eo);
 		matched = has_sel = ctab->w->p.l;
 	}
@@ -526,15 +608,13 @@ new_undo(struct fbuf *fb)
 {
 	struct undo *u;
 
-	fb->no_undo = 0;
-
 	if (fb->undo.end && fb->undo.end->nex) {
 		fb->undo.end = fb->undo.end->nex;
-		return undoof(fb->undo.end);
+		u = undoof(fb->undo.end);
+		str_free(&u->e.replace);
+		return u;
 	}
 
-	if (fb->undo.beg && fb->no_undo)
-		return undoof(fb->undo.beg);
 
 	u = ecalloc(1, sizeof(*u));
 	list_insert(&fb->undo, fb->undo.end, &u->link);
@@ -868,19 +948,6 @@ set_row(struct win *w, int row)
 }
 
 void
-set_rowcol(struct marker *m)
-{
-	ctab->w->p.fb = m->fb;
-	if (ctab->w->p.fb->ldirty || !m->l)
-		m->l = get_line_nex(lineof(m->fb->lines.beg), m->row);
-	ctab->w->p.l = m->l;
-	ctab->w->p.row = m->row;
-	ctab->w->p.rowoff = m->rowoff;
-	set_row(ctab->w, m->row);
-	set_col(ctab->w, m->col);
-}
-
-void
 sys_copy(const char *s)
 {
 	const char **cmd = NULL;
@@ -952,6 +1019,19 @@ tmp_fbuf(void)
 	fb->pos.fb = fb;
 
 	return fb;
+}
+
+void
+xgoto_mark(struct marker *m)
+{
+	ctab->w->p.fb = m->fb;
+	if (ctab->w->p.fb->ldirty || !m->l)
+		m->l = get_line_nex(lineof(m->fb->lines.beg), m->row);
+	ctab->w->p.l = m->l;
+	ctab->w->p.row = m->row;
+	ctab->w->p.rowoff = m->rowoff;
+	set_row(ctab->w, m->row);
+	set_col(ctab->w, m->col);
 }
 
 /* key functions */
@@ -1062,10 +1142,7 @@ void
 delete(const union arg *arg)
 {
 	struct str buf;
-	struct line *l, *nex;
-	int beg, end, len;
-	struct selection sel;
-
+	struct edit e;
 	struct undo *u;
 
 	if (!has_sel && ctab->w->p.col >= (int)ctab->w->p.l->s.len - 1) {
@@ -1073,70 +1150,19 @@ delete(const union arg *arg)
 		return;
 	}
 
-	u = new_undo(ctab->w->p.fb);
-	u->type = UNDO_DELETE;
-
 	if (!has_sel) {
-		get_rowcol(&u->pb);
-		get_rowcol(&u->pe);
-		str_empty(&u->s);
-		estr_append_chr(&u->s, ctab->w->p.l->s.s[ctab->w->p.col]);
 		estr_remove(&ctab->w->p.l->s, ctab->w->p.col, 1);
 		refreshl(ctab->w, ctab->w->p.l);
 		return;
 	}
 
-	str_empty(&buf);
+	e.beg = ctab->w->p;
+	e.end = SEL_MARKER;
+	str_empty(&e.replace);
+	u = edit(&buf, &e);
+	u->e.end = u->e.beg;
 
-	get_sel(&sel);
-	u->pb = *sel.begm;
-	u->pe = *sel.endm;
-
-	beg = sel.begm->row;
-	end = sel.endm->row;
-	l = sel.begm->l;
-	set_row(ctab->w, sel.begm->row);
-
-	if (sel.first_len)
-		estr_append_str(&buf, &STR(l->s.s + sel.first, sel.first_len));
-
-	l = lineof(l->link.nex);
-	for (int i = beg + 1; i < end; i++) {
-		if (l->s.len <= 0)
-			continue;
-		estr_append_str(&buf, &l->s);
-		nex = lineof(l->link.nex);
-		remove_line(ctab->w->p.fb, l);
-		l = nex;
-	}
-
-	/* wtf */
-	if (sel.last_len) {
-		estr_append_str(&buf, &STR(l->s.s, sel.last_len));
-		if (sel.last_len >= (int)l->s.len) {
-			remove_line(ctab->w->p.fb, l);
-		} else {
-			estr_remove(&l->s, 0, sel.last_len);
-			refreshl(ctab->w, l);
-		}
-	}
-
-	l = ctab->w->p.l;
-
-	if (sel.first_len) {
-		len = sel.first_len;
-		if (sel.first + len >= (int)l->s.len)
-			len--;
-		estr_remove(&l->s, sel.first, len);
-		refreshl(ctab->w, l);
-		if (len != sel.first_len)
-			concat_line(&ARG(0));
-	}
-
-	set_col(ctab->w, sel.first);
-
-	dup_to_reg('+', buf.s, buf.len);
-	u->s = buf;
+	dup_to_reg('+', buf.s);
 
 	has_sel = NULL;
 }
@@ -1186,35 +1212,21 @@ goto_mark(const union arg *arg)
 	if (!m->fb)
 		return;
 
-	set_rowcol(m);
+	xgoto_mark(m);
 }
 
 void
 insert(const union arg *arg)
 {
-	const char *c;
-	struct line *l = ctab->w->p.l;
-	struct str s;
-
-	s.s = (char*)arg->s;
-	s.len = 0;
-	for (c = arg->s; *c; c++) {
-		if (*c == '\n') {
-			estr_insert_str(&l->s, ctab->w->p.col - s.len, &s);
-			s.s = (char*)(c + 1);
-			s.siz = s.len = 0;
-			new_line(&ARG(.s = "dI")); /* keep the text of line */
-			l = ctab->w->p.l;
-			continue;
-		}
-		s.len++;
-		ctab->w->p.col++;
-	}
-
-	refreshl(ctab->w, l);
-
-	estr_insert_str(&l->s, ctab->w->p.col - s.len, &s);
-	set_col(ctab->w, ctab->w->p.col);
+	struct edit e;
+	struct undo *u;
+	e.beg = e.end = ctab->w->p;
+	e.replace.s = strdup(arg->s);
+	e.replace.len = strlen(e.replace.s);
+	e.replace.siz = e.replace.len + 1;
+	u = edit(NULL, &e);
+	u->e.end = ctab->w->p;
+	str_free(&u->e.replace);
 	has_sel = NULL;
 }
 
@@ -1233,7 +1245,7 @@ mark(const union arg *arg)
 	if (!m)
 		return;
 
-	get_rowcol(m);
+	*m = ctab->w->p;
 }
 
 void
@@ -1281,7 +1293,7 @@ search(const union arg *arg)
 	if (!pattern)
 		return;
 
-	get_rowcol(&orig);
+	orig = ctab->w->p;
 
 	/* TODO: search in same line */
 	if (arg->i == -1)
@@ -1300,7 +1312,7 @@ search(const union arg *arg)
 	if (fn())
 		return;
 
-	set_rowcol(&orig);
+	xgoto_mark(&orig);
 	has_sel = NULL;
 }
 
@@ -1339,14 +1351,14 @@ sel_word(const union arg *arg)
 	else
 		sel_word_prv(&beg, &end);
 
-	get_rowcol(&fake);
+	fake = ctab->w->p;
 
 	fake.col = beg - l->s.s;
-	set_rowcol(&fake);
+	xgoto_mark(&fake);
 	jumping();
 
 	fake.col = end - l->s.s;
-	set_rowcol(&fake);
+	xgoto_mark(&fake);
 
 	refreshw(ctab->w);
 
@@ -1398,25 +1410,18 @@ void
 undo(const union arg *arg)
 {
 	struct fbuf *fb = ctab->w->p.fb;
-	struct undo *u;
-
-	if (fb->no_undo)
-		return;
-
-	u = undoof(fb->undo.end);
-
-	switch (u->type) {
-	case UNDO_DELETE:
-		set_rowcol(&u->pb);
-		insert(&ARG(.s = u->s.s));
-		set_rowcol(&u->pe);
-		break;
-	}
+	struct undo *u = undoof(fb->undo.end);
+	struct edit e;
 
 	if (fb->undo.end->prv)
 		fb->undo.end = fb->undo.end->prv;
-	else
-		fb->no_undo = 1;
+
+	e = u->e;
+	str_empty(&u->e.replace);
+
+	edit(NULL, &e);
+
+	fb->undo.end = fb->undo.end->prv;
 }
 
 void
@@ -1443,8 +1448,7 @@ yank(const union arg *arg)
 	if (sel.last_len)
 		estr_append_str(&buf, &STR(l->s.s, sel.last_len));
 
-	dup_to_reg('+', buf.s, buf.len);
-	str_free(&buf);
+	dup_to_reg('+', buf.s);
 }
 
 /* command functions */
@@ -1462,7 +1466,7 @@ cmd_buffer(int argc, const char *argv[])
 			return;
 		fb = fbs.e[idx];
 		fb->pos.fb = fb;
-		set_rowcol(&fb->pos);
+		xgoto_mark(&fb->pos);
 		return;
 	}
 
@@ -1482,7 +1486,7 @@ cmd_buffer(int argc, const char *argv[])
 		list_insert(&fb->lines, fb->lines.end, &l->link);
 	}
 
-	set_rowcol(&fb->pos);
+	xgoto_mark(&fb->pos);
 }
 
 void
@@ -1528,7 +1532,7 @@ cmd_edit(int argc, const char *argv[])
 	fclose(fp);
 setwin:
 	fb->pos.fb = fb;
-	set_rowcol(&fb->pos);
+	xgoto_mark(&fb->pos);
 }
 
 void
@@ -1557,7 +1561,7 @@ cmd_marks(int argc, const char *argv[])
 		list_insert(&fb->lines, fb->lines.end, &l->link);
 	}
 
-	set_rowcol(&fb->pos);
+	xgoto_mark(&fb->pos);
 
 	if (fb->nline == 0)
 		cmd_quit(0, NULL);
