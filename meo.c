@@ -1426,6 +1426,20 @@ split_win(const union arg *arg)
 }
 
 void
+suspend(const union arg *arg)
+{
+	sctui_fini();
+	sctui_close_alt_screen();
+	sctui_commit();
+	kill(0, SIGSTOP);
+	for (int i = 0; i < ctab->wins.n; i++)
+		ctab->wins.e[i]->refresh = 1;
+	sctui_init();
+	sctui_open_alt_screen();
+	sctui_commit();
+}
+
+void
 undo(const union arg *arg)
 {
 	struct edit e;

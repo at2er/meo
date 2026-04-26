@@ -207,6 +207,7 @@ sctui_fini(void)
 {
 	assert(global_sctui.init);
 	tcsetattr(STDIN_FILENO, TCSAFLUSH, &global_sctui.orig);
+	global_sctui.init = 0;
 }
 
 int

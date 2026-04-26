@@ -64,6 +64,7 @@ static const struct key normal_keys[] = {
 	{":",    mode,        {.i = MODE_CMD}    },
 	{"^d",   move_row,    {.i =  10}         },
 	{"^u",   move_row,    {.i = -10}         },
+	{"^z",   suspend,     {0}                },
 	{NULL,   NULL,        {0}                }
 };
 
