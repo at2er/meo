@@ -55,6 +55,7 @@ static const struct key normal_keys[] = {
 	{"P",    paste,       {.s = "+P"  }      },
 	{"q",    cmd,         {.s = "quit"}      },
 	{"u",    undo,        {0}                },
+	{"U",    redo,        {0}                },
 	{"v",    sel,         {0}                },
 	{"w",    sel_word,    {.i = 1}           },
 	{"y",    yank,        {.i = '+'}         },
