@@ -11,6 +11,7 @@
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/wait.h>
 #include <unistd.h>
 
 #define UTILSH_LIST_STRIP
@@ -31,8 +32,8 @@
 #define refreshw(WREF) ((WREF)->refresh = 1)
 
 struct selection {
-	struct marker *begm, *endm;
-	int first, first_len, last_len;
+	struct marker *beg, *end;
+	int first_len, last_len;
 };
 
 static void comp_pattern(const char *p, int len);
@@ -51,6 +52,7 @@ static struct line *get_line_nex(struct line *beg, int step);
 static struct line *get_line_prv(struct line *beg, int step);
 static struct marker *get_marker(int k);
 static char get_marker_chr(int idx);
+static void get_minmax_marker(struct marker **beg, struct marker **end);
 static char **get_reg(int k);
 static int get_rx(struct win *w, struct line *l, int col);
 static int get_ry(struct win *w, int row);
@@ -176,13 +178,13 @@ draw_sel(void)
 	sctui_out(sctui_attr_on(sel_attr), 0);
 
 	get_sel(&sel);
-	l = sel.begm->l;
+	l = sel.beg->l;
 	if (sel.first_len)
-		draw_line(ctab->w, l, sel.begm->row, sel.first,
-				 sel.first + sel.first_len);
+		draw_line(ctab->w, l, sel.beg->row, sel.beg->col,
+				sel.beg->col + sel.first_len);
 
 	l = lineof(l->link.nex);
-	for (int i = sel.begm->row + 1; i < sel.endm->row; i++) {
+	for (int i = sel.beg->row + 1; i < sel.end->row; i++) {
 		if (l->s.len <= 0)
 			continue;
 		draw_line(ctab->w, l, i, 0, l->s.len);
@@ -190,7 +192,7 @@ draw_sel(void)
 	}
 
 	if (sel.last_len)
-		draw_line(ctab->w, l, sel.endm->row, 0, sel.last_len);
+		draw_line(ctab->w, l, sel.end->row, 0, sel.last_len);
 
 	sctui_out(sctui_attr_off(), 0);
 }
@@ -246,14 +248,9 @@ edit(struct str *buf, struct edit *e)
 	u = new_undo(ctab->w->p.fb);
 	u->e = *e;
 
-	if (beg->row > end->row
-	|| (beg->row == end->row && beg->col > end->col)) {
-		u->e.beg = e->end;
-		u->e.end = e->beg;
-	}
-
-	beg = &u->e.beg;
-	end = &u->e.end;
+	get_minmax_marker(&beg, &end);
+	u->e.beg = *beg;
+	u->e.end = *end;
 
 	if (!buf)
 		buf = &_buf;
@@ -443,6 +440,17 @@ get_marker_chr(int idx)
 	return idx;
 }
 
+void
+get_minmax_marker(struct marker **beg, struct marker **end)
+{
+	struct marker *b = *beg, *e = *end;
+	if (b->row > e->row
+	|| (b->row == e->row && b->col > e->col)) {
+		*end = b;
+		*beg = e;
+	}
+}
+
 char **
 get_reg(int k)
 {
@@ -480,30 +488,14 @@ get_ry(struct win *w, int row)
 void
 get_sel(struct selection *sel)
 {
-	if (ctab->w->p.row < SEL_MARKER.row) {
-		sel->begm = &ctab->w->p;
-		sel->endm = &SEL_MARKER;
-	} if (ctab->w->p.row > SEL_MARKER.row) {
-		sel->begm = &SEL_MARKER;
-		sel->endm = &ctab->w->p;
-	} else {
-		if (ctab->w->p.col <= SEL_MARKER.col) {
-			sel->begm = &ctab->w->p;
-			sel->endm = &SEL_MARKER;
-		} else {
-			sel->begm = &SEL_MARKER;
-			sel->endm = &ctab->w->p;
-		}
-	}
-
+	sel->beg = &SEL_MARKER;
+	sel->end = &ctab->w->p;
+	get_minmax_marker(&sel->beg, &sel->end);
 	if (ctab->w->p.row != SEL_MARKER.row) {
-		sel->first = sel->begm->col;
-		sel->first_len = sel->begm->l->s.len - sel->first;
-		sel->last_len = sel->endm->col;
+		sel->first_len = sel->beg->l->s.len - sel->beg->col;
+		sel->last_len = sel->end->col;
 	} else {
-		sel->first = MIN(sel->begm->col, sel->endm->col);
-		sel->first_len = MAX(sel->begm->col, sel->endm->col)
-			- sel->first;
+		sel->first_len = sel->end->col - sel->beg->col;
 		sel->last_len = 0;
 	}
 }
@@ -511,8 +503,17 @@ get_sel(struct selection *sel)
 void
 init(void)
 {
+	struct sigaction sa;
+
 	sctui_init();
 	sctui_open_alt_screen();
+
+	sigemptyset(&sa.sa_mask);
+	sa.sa_flags = SA_NOCLDSTOP | SA_NOCLDWAIT | SA_RESTART;
+	sa.sa_handler = SIG_IGN;
+	sigaction(SIGCHLD, &sa, NULL);
+
+	while (waitpid(-1, NULL, WNOHANG) > 0);
 
 	fds[0].fd = STDIN_FILENO;
 	fds[0].events = POLLIN;
@@ -1189,6 +1190,61 @@ delete(const union arg *arg)
 }
 
 void
+find_nex(const union arg *arg)
+{
+	struct marker *p = &ctab->w->p;
+	const char *c = p->l->s.s + p->col;
+	int k = request_key();
+
+	jumping();
+	while (*c) {
+		if (*c == '\n') {
+			if (arg->i) {
+				move_row(&ARG(.i = 1));
+				c = p->l->s.s;
+				continue;
+			} else {
+				return;
+			}
+		}
+		if (*c == k)
+			break;
+		c++;
+	}
+
+	c++; /* let the selection include expected character */
+	has_sel = p->l;
+	set_col(ctab->w, c - p->l->s.s);
+}
+
+void
+find_prv(const union arg *arg)
+{
+	struct marker *p = &ctab->w->p;
+	const char *c = p->l->s.s + p->col;
+	int k = request_key();
+
+	jumping();
+	while (*c) {
+		if (*c == k)
+			break;
+		if (c == p->l->s.s) {
+			if (arg->i) {
+				move_row(&ARG(.i = - 1));
+				c = p->l->s.s + p->l->s.len - 1;
+				continue;
+			} else {
+				return;
+			}
+		}
+		c--;
+	}
+
+	has_sel = p->l;
+	set_col(ctab->w, c - p->l->s.s);
+}
+
+void
 goto_beg(const union arg *arg)
 {
 	switch (arg->i) {
@@ -1359,7 +1415,6 @@ void
 sel_word(const union arg *arg)
 {
 	const char *beg, *end, *t;
-	struct marker fake;
 	struct line *l;
 
 	l = ctab->w->p.l;
@@ -1370,14 +1425,10 @@ sel_word(const union arg *arg)
 	else
 		sel_word_prv(&beg, &end);
 
-	fake = ctab->w->p;
-
-	fake.col = beg - l->s.s;
-	xgoto_mark(&fake);
+	set_col(ctab->w, beg - l->s.s);
 	jumping();
 
-	fake.col = end - l->s.s;
-	xgoto_mark(&fake);
+	set_col(ctab->w, end - l->s.s);
 
 	refreshw(ctab->w);
 
@@ -1466,12 +1517,12 @@ yank(const union arg *arg)
 	str_empty(&buf);
 
 	get_sel(&sel);
-	l = sel.begm->l;
+	l = sel.beg->l;
 	if (sel.first_len)
-		estr_append_str(&buf, &STR(l->s.s + sel.first, sel.first_len));
+		estr_append_str(&buf, &STR(l->s.s + sel.beg->col, sel.first_len));
 
 	l = lineof(l->link.nex);
-	for (int i = sel.begm->row + 1; i < sel.endm->row; i++) {
+	for (int i = sel.beg->row + 1; i < sel.end->row; i++) {
 		if (l->s.len <= 0)
 			continue;
 		estr_append_str(&buf, &l->s);
