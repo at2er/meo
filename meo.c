@@ -177,6 +177,8 @@ draw_sel(void)
 
 	sctui_out(sctui_attr_on(sel_attr), 0);
 
+	sel.beg = &SEL_MARKER;
+	sel.end = &ctab->w->p;
 	get_sel(&sel);
 	l = sel.beg->l;
 	if (sel.first_len)
@@ -238,41 +240,37 @@ dup_to_reg(int r, char *s)
 struct undo *
 edit(struct str *buf, struct edit *e)
 {
-	struct marker *beg = &e->beg, *end = &e->end;
 	char *c;
 	struct line *l, *nex;
-	int len;
 	struct str s, _buf;
+	struct selection sel;
 	struct undo *u;
 
 	u = new_undo(ctab->w->p.fb);
 	u->e = *e;
 
-	get_minmax_marker(&beg, &end);
-	u->e.beg = *beg;
-	u->e.end = *end;
+	sel.beg = &e->beg;
+	sel.end = &e->end;
+	get_sel(&sel);
+	u->e.beg = *sel.beg;
+	u->e.end = *sel.end;
 
 	if (!buf)
 		buf = &_buf;
 	str_empty(buf);
 
-	set_row(ctab->w, beg->row);
+	set_row(ctab->w, sel.beg->row);
 	l = ctab->w->p.l;
 
-	if (beg->row == end->row)
-		len = end->col - beg->col;
-	else
-		len = l->s.len - beg->col;
-
-	if (len) {
-		estr_append_str(buf, &STR(l->s.s + beg->col, len));
-		estr_remove(&l->s, beg->col, len);
+	if (sel.first_len) {
+		estr_append_str(buf, &STR(l->s.s + sel.beg->col, sel.first_len));
+		estr_remove(&l->s, sel.beg->col, sel.first_len);
 		refreshl(ctab->w, l);
 	}
 
 	l = lineof(l->link.nex);
 
-	for (int i = beg->row + 1; i < end->row; i++) {
+	for (int i = sel.beg->row + 1; i < sel.end->row; i++) {
 		if (l->s.len <= 0) {
 			estr_append_chr(buf, '\n');
 			continue;
@@ -283,19 +281,19 @@ edit(struct str *buf, struct edit *e)
 		l = nex;
 	}
 
-	if (beg->row != end->row) {
-		estr_append_str(buf, &STR(end->l->s.s, end->col));
-		estr_append_cstr(&beg->l->s, end->l->s.s + end->col);
-		remove_line(ctab->w->p.fb, end->l);
+	if (sel.last_len) {
+		estr_append_str(buf, &STR(l->s.s, sel.last_len));
+		estr_append_cstr(&sel.beg->l->s, l->s.s + sel.last_len);
+		remove_line(ctab->w->p.fb, l);
 	}
 
-	if (beg->l->s.s[beg->l->s.len - 1] != '\n')
-		estr_append_chr(&beg->l->s, '\n');
+	if (sel.beg->l->s.s[sel.beg->l->s.len - 1] != '\n')
+		estr_append_chr(&sel.beg->l->s, '\n');
 
 	if (buf->s)
 		estr_from_str(&u->e.replace, buf);
 
-	set_col(ctab->w, beg->col);
+	set_col(ctab->w, sel.beg->col);
 
 	if (!e->replace.s) {
 		u->e.end = u->e.beg;
@@ -488,10 +486,8 @@ get_ry(struct win *w, int row)
 void
 get_sel(struct selection *sel)
 {
-	sel->beg = &SEL_MARKER;
-	sel->end = &ctab->w->p;
 	get_minmax_marker(&sel->beg, &sel->end);
-	if (ctab->w->p.row != SEL_MARKER.row) {
+	if (sel->beg->row != sel->end->row) {
 		sel->first_len = sel->beg->l->s.len - sel->beg->col;
 		sel->last_len = sel->end->col;
 	} else {
@@ -1516,6 +1512,8 @@ yank(const union arg *arg)
 	struct selection sel;
 	str_empty(&buf);
 
+	sel.beg = &SEL_MARKER;
+	sel.end = &ctab->w->p;
 	get_sel(&sel);
 	l = sel.beg->l;
 	if (sel.first_len)
