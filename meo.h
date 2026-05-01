@@ -5,7 +5,7 @@
 
 enum { MODE_NOR, MODE_INS, MODE_CMD, MODE_SEARCH };
 enum { GOTO_IN_FILE, GOTO_IN_LINE };
-enum { SPLIT_HOR, SPLIT_VER };
+enum { SPLIT_HOR = 1, SPLIT_VER };
 enum { UP, DOWN };
 enum UNDO_TYPE { UNDO_NO, UNDO_DELETE };
 
@@ -54,8 +54,8 @@ struct line {
 	struct utilsh_list link;
 };
 
-typedef darr(struct tab  *) tab_arr;
-typedef darr(struct win  *) win_arr;
+typedef darr(struct tab *) tab_arr;
+typedef darr(struct win *) win_arr;
 struct tab {
 	struct win *w;
 	win_arr wins;
@@ -64,9 +64,8 @@ struct tab {
 struct win {
 	struct line *draw;
 	struct marker p;
-	struct win *prv;
-	unsigned int refresh:1,
-	             split:1; /* 0:hor 1:ver */
+	struct win *prv, *nex;
+	unsigned int refresh:1, split:4;
 	int x, y, w, h;
 };
 
@@ -83,6 +82,8 @@ static void concat_line(const union arg *arg);
 static void delete(const union arg *arg);
 static void find_nex(const union arg *arg);
 static void find_prv(const union arg *arg);
+static void focus_win_hor(const union arg *arg);
+static void focus_win_ver(const union arg *arg);
 static void goto_beg(const union arg *arg);
 static void goto_end(const union arg *arg);
 static void goto_mark(const union arg *arg);

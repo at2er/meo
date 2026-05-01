@@ -67,11 +67,16 @@ static const struct key normal_keys[] = {
 	{"^d",   move_row,    {.i =  10}         },
 	{"^u",   move_row,    {.i = -10}         },
 	{"^z",   suspend,     {0}                },
+	{" h",   focus_win_hor, {.i = -1}          },
+	{" j",   focus_win_ver, {.i =  1}          },
+	{" k",   focus_win_ver, {.i = -1}          },
+	{" l",   focus_win_hor, {.i =  1}          },
 	{NULL,   NULL,        {0}                }
 };
 
 static const struct key insert_keys[] = {
 	/* key   func         arg               */
+	{"jj",   insert,      {.s = "j"}         },
 	{"jk",   mode,        {.i = MODE_NOR}    },
 	{"/b",   backspace,   {.i = 1}           },
 	{"/e",   mode,        {.i = MODE_NOR}    },

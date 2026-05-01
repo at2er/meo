@@ -66,6 +66,7 @@ static struct undo *new_undo(struct fbuf *fb);
 static void refreshl(struct win *w, struct line *l);
 static void remove_fbuf(struct fbuf *fb);
 static void remove_line(struct fbuf *fb, struct line *l);
+static struct win *remove_win(win_arr *wins, struct win *win);
 static void render_line(const struct win *w, struct line *l);
 static int request_key(void);
 static void ruler(void);
@@ -731,6 +732,70 @@ remove_line(struct fbuf *fb, struct line *l)
 	free(l);
 }
 
+struct win *
+remove_win(win_arr *wins, struct win *win)
+{
+	struct fbuf *fb;
+	struct win *focus, *w;
+	int using = 0;
+
+	w = ctab->w;
+	switch (w->split) {
+	case 0:
+		if (!w->prv)
+			goto remove;
+		switch (w->prv->split) {
+		case SPLIT_HOR:
+			w->prv->w += w->w;
+			break;
+		case SPLIT_VER:
+			w->prv->h += w->h;
+			break;
+		}
+		goto focus_prv;
+	case SPLIT_HOR:
+		w->nex->w += w->w;
+		w->nex->x = w->x;
+		goto focus_nex;
+	case SPLIT_VER:
+		w->nex->h += w->h;
+		w->nex->y = w->y;
+	focus_nex:
+		focus = w->nex;
+		break;
+	focus_prv:
+		focus = w->prv;
+		focus->split = 0;
+		break;
+	}
+
+remove:
+	refreshw(focus);
+	fb = w->p.fb;
+	free(w);
+	for (int i = 0; i < ctab->wins.n; i++) {
+		if (ctab->wins.e[i] == w) {
+			darr_remove(&ctab->wins, i);
+			break;
+		}
+	}
+
+	if (!fb->tmp)
+		goto end;
+
+	for (int i = 0; i < tabs.n; i++)
+		for (int j = 0; j < tabs.e[i]->wins.n; j++)
+			using += tabs.e[i]->wins.e[j]->p.fb == fb;
+	using += 1; /* current */
+
+	if (using > 1)
+		goto end;
+
+	remove_fbuf(fb);
+end:
+	return focus;
+}
+
 void
 render_line(const struct win *w, struct line *l)
 {
@@ -1241,6 +1306,35 @@ find_prv(const union arg *arg)
 }
 
 void
+focus_win_hor(const union arg *arg)
+{
+}
+
+void
+focus_win_ver(const union arg *arg)
+{
+	struct win *cur = ctab->w;
+	switch (arg->i) {
+	case 1:
+		switch (cur->split) {
+		case SPLIT_VER:
+			ctab->w = cur->nex;
+			break;
+		}
+		break;
+	case -1:
+		if (!cur->prv)
+			return;
+		switch (cur->prv->split) {
+		case SPLIT_VER:
+			ctab->w = cur->prv;
+			break;
+		}
+		break;
+	}
+}
+
+void
 goto_beg(const union arg *arg)
 {
 	switch (arg->i) {
@@ -1372,11 +1466,10 @@ search(const union arg *arg)
 	if (fn())
 		return;
 
-	if (arg->i == -1) {
+	if (arg->i == -1)
 		goto_end(&ARG(.i = GOTO_IN_FILE));
-	} else {
+	else
 		goto_beg(&ARG(.i = GOTO_IN_FILE));
-	}
 
 	matched = NULL;
 
@@ -1467,9 +1560,11 @@ split_win(const union arg *arg)
 	set_row(ctab->w, ctab->w->p.row);
 
 	win->prv = ctab->w;
+	win->prv->nex = win;
 	win->prv->split = arg->i;
 	ctab->w = win;
-	ctab->w->split = arg->i;
+	ctab->w->nex = NULL;
+	ctab->w->split = 0;
 }
 
 void
@@ -1672,47 +1767,12 @@ cmd_write(int argc, const char *argv[])
 void
 cmd_quit(int argc, const char *argv[])
 {
-	struct fbuf *fb;
-	int using = 0;
-	struct win *w;
-
 	if (ctab->wins.n <= 1) {
 		running = 0;
 		return;
 	}
 
-	w = ctab->w;
-	ctab->w = ctab->w->prv;
-	switch (w->split) {
-	case SPLIT_HOR:
-		ctab->w->w += w->w;
-		break;
-	case SPLIT_VER:
-		ctab->w->h += w->h;
-		break;
-	}
-	refreshw(ctab->w);
-	fb = w->p.fb;
-	free(w);
-	for (int i = 0; i < ctab->wins.n; i++) {
-		if (ctab->wins.e[i] == w) {
-			darr_remove(&ctab->wins, i);
-			break;
-		}
-	}
-
-	if (!fb->tmp)
-		return;
-
-	for (int i = 0; i < tabs.n; i++)
-		for (int j = 0; j < tabs.e[i]->wins.n; j++)
-			using += tabs.e[i]->wins.e[j]->p.fb == fb;
-	using += 1; /* current */
-
-	if (using > 1)
-		return;
-
-	remove_fbuf(fb);
+	ctab->w = remove_win(&ctab->wins, ctab->w);
 }
 
 int
