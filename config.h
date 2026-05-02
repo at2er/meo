@@ -67,10 +67,12 @@ static const struct key normal_keys[] = {
 	{"^d",   move_row,    {.i =  10}         },
 	{"^u",   move_row,    {.i = -10}         },
 	{"^z",   suspend,     {0}                },
-	{" h",   focus_win_hor, {.i = -1}          },
-	{" j",   focus_win_ver, {.i =  1}          },
-	{" k",   focus_win_ver, {.i = -1}          },
-	{" l",   focus_win_hor, {.i =  1}          },
+	{" ws",  split_win,   {.i = SPLIT_HOR}   },
+	{" wv",  split_win,   {.i = SPLIT_VER}   },
+	{" wh",  focus_win_hor, {.i = -1}          },
+	{" wj",  focus_win_ver, {.i =  1}          },
+	{" wk",  focus_win_ver, {.i = -1}          },
+	{" wl",  focus_win_hor, {.i =  1}          },
 	{NULL,   NULL,        {0}                }
 };
 

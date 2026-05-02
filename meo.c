@@ -167,7 +167,7 @@ draw_line(struct win *w, struct line *l, int row, int beg, int end)
 {
 	int rx = get_rx(w, l, beg), ry = get_ry(w, row),
 	    len = get_rx(w, l, end) - rx;
-	sctui_text(rx, ry, l->r + rx, MIN(len, w->w));
+	sctui_text(rx, ry, l->r + rx - w->x, MIN(len, w->w));
 }
 
 void
@@ -1308,6 +1308,25 @@ find_prv(const union arg *arg)
 void
 focus_win_hor(const union arg *arg)
 {
+	struct win *cur = ctab->w;
+	switch (arg->i) {
+	case 1:
+		switch (cur->split) {
+		case SPLIT_HOR:
+			ctab->w = cur->nex;
+			break;
+		}
+		break;
+	case -1:
+		if (!cur->prv)
+			return;
+		switch (cur->prv->split) {
+		case SPLIT_HOR:
+			ctab->w = cur->prv;
+			break;
+		}
+		break;
+	}
 }
 
 void
