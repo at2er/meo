@@ -43,6 +43,8 @@ static void draw_sel(void);
 static void draw_win(struct win *w);
 static void dup_to_reg(int r, char *s);
 static struct undo *edit(struct str *buf, struct edit *e);
+static void edit_insert(struct undo *u, struct edit *e);
+static void edit_new_line(int updown);
 static void empty_fbuf(struct fbuf *fb);
 static struct line *empty_line(void);
 static void fini(void);
@@ -240,9 +242,8 @@ dup_to_reg(int r, char *s)
 struct undo *
 edit(struct str *buf, struct edit *e)
 {
-	char *c;
 	struct line *l, *nex;
-	struct str s, _buf;
+	struct str _buf;
 	struct selection sel;
 	struct undo *u;
 
@@ -281,7 +282,7 @@ edit(struct str *buf, struct edit *e)
 		l = nex;
 	}
 
-	if (sel.last_len) {
+	if (sel.beg->row != sel.end->row) {
 		estr_append_str(buf, &STR(l->s.s, sel.last_len));
 		estr_append_cstr(&sel.beg->l->s, l->s.s + sel.last_len);
 		remove_line(ctab->w->p.fb, l);
@@ -300,30 +301,74 @@ edit(struct str *buf, struct edit *e)
 		return u;
 	}
 
-	l = ctab->w->p.l; /* at beg->l */
+	edit_insert(u, e);
+
+	return u;
+}
+
+void
+edit_insert(struct undo *u, struct edit *e)
+{
+	char *c;
+	struct marker *p = &ctab->w->p;
+	struct str s, orig;
+
+	str_empty(&orig);
+
 	s.s = e->replace.s;
 	s.len = 0;
 	for (c = e->replace.s; *c; c++) {
 		if (*c == '\n') {
-			estr_insert_str(&l->s, ctab->w->p.col - s.len, &s);
+			if (!orig.s) {
+				estr_from_cstr(&orig, p->l->s.s + p->col);
+				estr_remove(&p->l->s, p->col, p->l->s.len - p->col);
+			}
+			estr_append_str(&p->l->s, &s);
+			estr_append_chr(&p->l->s, '\n');
 			s.s = c + 1;
 			s.siz = s.len = 0;
-			new_line(&ARG(.s = "dI")); /* keep the text of line */
-			l = ctab->w->p.l;
+			edit_new_line(1);
 			continue;
 		}
 		s.len++;
-		ctab->w->p.col++;
+		p->col++;
 	}
+	refreshl(ctab->w, p->l);
+
+	estr_insert_str(&p->l->s, p->col - s.len, &s);
+	estr_insert_str(&p->l->s, p->col - s.len + s.len, &orig);
+	str_free(&orig);
+
+	set_col(ctab->w, p->col);
+
+	u->e.end = *p;
+
+	/* don't free() it */
+	str_empty(&u->e.replace);
+}
+
+void
+edit_new_line(int updown)
+{
+	struct marker *p = &ctab->w->p;
+	struct line *prv, *l;
+
+	p->fb->ldirty = 1;
+	prv = p->l;
+	if (updown == 0)
+		prv = lineof(prv->link.prv);
+	l = ecalloc(1, sizeof(*l));
+
+	list_insert(&p->fb->lines,
+			prv ? &prv->link : NULL,
+			&l->link);
+	p->fb->nline++;
+
+	if (prv)
+		refreshl(ctab->w, prv);
 	refreshl(ctab->w, l);
 
-	estr_insert_str(&l->s, ctab->w->p.col - s.len, &s);
-	set_col(ctab->w, ctab->w->p.col);
-
-	u->e.end = ctab->w->p;
-	str_empty(&u->e.replace);
-
-	return u;
+	move_row(&ARG(.i = updown));
 }
 
 void
@@ -561,8 +606,10 @@ keypress(int k)
 		return;
 
 	h = skb_handle_key(k);
-	if (!h && !mode_can_insert())
+	if (!h && !mode_can_insert()) {
 		skb_ncombo = 0;
+		return;
+	}
 	if (h)
 		return;
 
@@ -630,38 +677,14 @@ new_undo(struct fbuf *fb)
 void
 new_line(const union arg *arg)
 {
-	struct line *l, *prv = ctab->w->p.l;
-	struct str s;
-
-	ctab->w->p.fb->ldirty = 1;
-
-	l = ecalloc(1, sizeof(*l));
-	if (arg->s[0] == 'u')
-		prv = lineof(prv->link.prv);
-	list_insert(&ctab->w->p.fb->lines,
-			prv ? &prv->link : NULL,
-			&l->link);
-	ctab->w->p.fb->nline++;
-	if (arg->s[0] == 'u')
-		ctab->w->p.l = l;
-
-	if (arg->s[1] && prv) {
-		s.s = prv->s.s + ctab->w->p.col;
-		s.len = prv->s.len - ctab->w->p.col;
-		s.siz = s.len + 1;
-		if (s.len > 0)
-			estr_append_str(&l->s, &s);
-		estr_remove(&prv->s, ctab->w->p.col, s.len - 1);
-	} else {
-		estr_from_cstr(&l->s, "\n");
-	}
-
-	set_col(ctab->w, 0);
-	move_row(&ARG(.i = arg->s[0] == 'd'));
-
-	if (prv)
-		refreshl(ctab->w, prv);
-	refreshl(ctab->w, l);
+	struct edit e;
+	e.beg = ctab->w->p;
+	e.beg.col = ctab->w->p.l->s.len - 1;
+	e.end = e.beg;
+	estr_from_cstr(&e.replace, "\n");
+	edit(NULL, &e);
+	str_free(&e.replace);
+	has_sel = NULL;
 }
 
 void
@@ -1058,43 +1081,30 @@ xgoto_mark(struct marker *m)
 void
 concat_line(const union arg *arg)
 {
-	struct line *l = ctab->w->p.l, *prv;
-
-	ctab->w->p.fb->ldirty = 1;
-
-	if (arg->i == -1) {
-		prv = lineof(l->link.prv);
-		if (!prv)
-			return;
-		ctab->w->p.col = prv->s.len;
-		move_row(&ARG(.i = -1));
-	} else {
-		prv = l;
-		l = lineof(l->link.nex);
-		if (!l)
-			return;
-	}
-
-	prv->s.len -= 1; /* remove the '\n' */
-	estr_append_str(&prv->s, &l->s);
-
-	remove_line(ctab->w->p.fb, l);
-
-	refreshl(ctab->w, prv);
+	struct edit e;
+	e.beg = e.end = ctab->w->p;
+	e.end.l = lineof(e.end.l->link.nex);
+	e.end.row++;
+	e.end.col = 0;
+	str_empty(&e.replace);
+	edit(NULL, &e);
 }
 
 void
 backspace(const union arg *arg)
 {
-	struct line *l = ctab->w->p.l;
+	struct edit e;
 	int pos = ctab->w->p.col - arg->i;
+	e.beg = e.end = ctab->w->p;
 	if (pos < 0) {
-		concat_line(&ARG(.i = -1));
-		return;
+		e.beg.l = lineof(e.beg.l->link.prv);
+		e.beg.row--;
+		e.beg.col = e.beg.l->s.len - 1;
+	} else {
+		e.beg.col--;
 	}
-	estr_remove(&l->s, pos, arg->i);
-	refreshl(ctab->w, l);
-	move_col(&ARG(.i = -arg->i));
+	str_empty(&e.replace);
+	edit(NULL, &e);
 }
 
 void
@@ -1161,26 +1171,27 @@ end:
 void
 delete(const union arg *arg)
 {
-	struct str buf;
+	struct str _buf, *buf = NULL;
 	struct edit e;
 
 	if (!has_sel && ctab->w->p.col >= (int)ctab->w->p.l->s.len - 1) {
-		concat_line(&ARG(0));
-		return;
-	}
-
-	if (!has_sel) {
-		estr_remove(&ctab->w->p.l->s, ctab->w->p.col, 1);
-		refreshl(ctab->w, ctab->w->p.l);
+		concat_line(0);
 		return;
 	}
 
 	e.beg = ctab->w->p;
-	e.end = SEL_MARKER;
+	if (has_sel) {
+		e.end = SEL_MARKER;
+		buf = &_buf;
+	} else {
+		e.end = e.beg;
+		e.end.col++;
+	}
 	str_empty(&e.replace);
-	edit(&buf, &e);
+	edit(buf, &e);
 
-	dup_to_reg('+', buf.s);
+	if (buf)
+		dup_to_reg('+', buf->s);
 
 	has_sel = NULL;
 }
@@ -1293,9 +1304,7 @@ insert(const union arg *arg)
 {
 	struct edit e;
 	e.beg = e.end = ctab->w->p;
-	e.replace.s = strdup(arg->s);
-	e.replace.len = strlen(e.replace.s);
-	e.replace.siz = e.replace.len + 1;
+	estr_from_cstr(&e.replace, arg->s);
 	edit(NULL, &e);
 	str_free(&e.replace);
 	has_sel = NULL;

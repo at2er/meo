@@ -55,7 +55,6 @@ static const struct key normal_keys[] = {
 	{"O",    new_line,    {.s = "u"   }      },
 	{"p",    paste,       {.s = "+"   }      },
 	{"P",    paste,       {.s = "+P"  }      },
-	{"q",    cmd,         {.s = "quit"}      },
 	{"u",    undo,        {0}                },
 	{"r",    redo,        {0}                },
 	{"v",    sel,         {0}                },
@@ -67,6 +66,7 @@ static const struct key normal_keys[] = {
 	{"^d",   move_row,    {.i =  10}         },
 	{"^u",   move_row,    {.i = -10}         },
 	{"^z",   suspend,     {0}                },
+	{" q",   cmd,         {.s = "quit"}      },
 	{NULL,   NULL,        {0}                }
 };
 
