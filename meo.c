@@ -314,6 +314,7 @@ edit_insert(struct undo *u, struct edit *e)
 	char *c;
 	struct marker *p = &ctab->w->p;
 	struct str s, orig;
+	int orig_col = p->col;
 
 	str_empty(&orig);
 
@@ -322,8 +323,8 @@ edit_insert(struct undo *u, struct edit *e)
 	for (c = e->replace.s; *c; c++) {
 		if (*c == '\n') {
 			if (!orig.s) {
-				estr_from_cstr(&orig, p->l->s.s + p->col);
-				estr_remove(&p->l->s, p->col, p->l->s.len - p->col);
+				estr_from_cstr(&orig, p->l->s.s + orig_col);
+				estr_remove(&p->l->s, orig_col, p->l->s.len - orig_col);
 			}
 			estr_append_str(&p->l->s, &s);
 			estr_append_chr(&p->l->s, '\n');
