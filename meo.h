@@ -3,11 +3,10 @@
 
 #define VLINE_RENDER_MAX 2048
 
-enum { MODE_NOR, MODE_INS, MODE_CMD, MODE_SEARCH };
+enum { FOCUS_PRV, FOCUS_MAIN, FOCUS_TMP };
 enum { GOTO_IN_FILE, GOTO_IN_LINE };
-enum { SPLIT_HOR, SPLIT_VER };
+enum { MODE_NOR, MODE_INS, MODE_CMD, MODE_SEARCH };
 enum { UP, DOWN };
-enum UNDO_TYPE { UNDO_NO, UNDO_DELETE };
 
 struct fbuf;
 struct win;
@@ -54,20 +53,22 @@ struct line {
 	struct utilsh_list link;
 };
 
-typedef darr(struct tab  *) tab_arr;
-typedef darr(struct win  *) win_arr;
-struct tab {
-	struct win *w;
-	win_arr wins;
-};
-
 struct win {
 	struct line *draw;
 	struct marker p;
 	struct win *prv;
-	unsigned int refresh:1,
-	             split:1; /* 0:hor 1:ver */
+	unsigned int refresh:1;
 	int x, y, w, h;
+};
+
+typedef darr(struct tab  *) tab_arr;
+typedef darr(struct win  *) win_arr;
+struct tab {
+	struct win *w,  /* current window */
+	            mw, /* main window */
+	            tmpw;
+
+	unsigned int enable_tmpw:1;
 };
 
 struct undo {
@@ -83,6 +84,7 @@ static void concat_line(const union arg *arg);
 static void delete(const union arg *arg);
 static void find_nex(const union arg *arg);
 static void find_prv(const union arg *arg);
+static void focus_win(const union arg *arg);
 static void goto_beg(const union arg *arg);
 static void goto_end(const union arg *arg);
 static void goto_mark(const union arg *arg);
@@ -98,8 +100,8 @@ static void search(const union arg *arg);
 static void sel(const union arg *arg);
 static void sel_line(const union arg *arg);
 static void sel_word(const union arg *arg);
-static void split_win(const union arg *arg);
 static void suspend(const union arg *arg);
+static void toggle_tmp_win(const union arg *arg);
 static void undo(const union arg *arg);
 static void yank(const union arg *arg);
 

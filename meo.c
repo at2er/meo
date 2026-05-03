@@ -82,6 +82,7 @@ static void set_row(struct win *w, int row);
 static void sys_copy(const char *s);
 static char *sys_paste(void);
 static struct fbuf *tmp_fbuf(void);
+static void xfocus_win(struct win *w);
 static void xgoto_mark(struct marker *m);
 
 static const char *usages[] = {
@@ -147,8 +148,9 @@ comp_pattern(const char *p, int len)
 void
 draw(void)
 {
-	for (int i = 0; i < ctab->wins.n; i++)
-		draw_win(ctab->wins.e[i]);
+	draw_win(&ctab->mw);
+	if (ctab->enable_tmpw)
+		draw_win(&ctab->tmpw);
 
 	ruler();
 	sctui_out(sctui_attr_on(bar_attr), 0);
@@ -560,12 +562,12 @@ init(void)
 	fds[0].events = POLLIN;
 
 	ctab = ecalloc(1, sizeof(*ctab));
-	ctab->w = ecalloc(1, sizeof(*ctab->w));
+	ctab->w = &ctab->mw;
+	memset(&ctab->mw, 0, sizeof(ctab->mw));
+	memset(&ctab->tmpw, 0, sizeof(ctab->tmpw));
 
 	darr_init(&tabs);
 	darr_append(&tabs, ctab);
-	darr_init(&ctab->wins);
-	darr_append(&ctab->wins, ctab->w);
 
 	ctab->w->w = global_sctui.w;
 	ctab->w->h = global_sctui.h - 1;
@@ -1065,6 +1067,18 @@ tmp_fbuf(void)
 }
 
 void
+xfocus_win(struct win *w)
+{
+	if (w == &ctab->tmpw && !ctab->enable_tmpw) {
+		toggle_tmp_win(0);
+		return;
+	}
+	w->prv = ctab->w;
+	ctab->w = w;
+	refreshw(ctab->w);
+}
+
+void
 xgoto_mark(struct marker *m)
 {
 	ctab->w->p.fb = m->fb;
@@ -1249,6 +1263,22 @@ find_prv(const union arg *arg)
 
 	has_sel = p->l;
 	set_col(ctab->w, c - p->l->s.s);
+}
+
+void
+focus_win(const union arg *arg)
+{
+	struct win *w;
+	switch (arg->i) {
+	case FOCUS_PRV:
+		if (!ctab->w->prv)
+			return;
+		w = ctab->w->prv;
+		break;
+	case FOCUS_MAIN: w = &ctab->mw;    break;
+	case FOCUS_TMP:  w = &ctab->tmpw;  break;
+	}
+	xfocus_win(w);
 }
 
 void
@@ -1447,52 +1477,50 @@ sel_word(const union arg *arg)
 }
 
 void
-split_win(const union arg *arg)
-{
-	struct win *win;
-
-	win = ecalloc(1, sizeof(*win));
-	darr_append(&ctab->wins, win);
-	memcpy(win, ctab->w, sizeof(*win));
-
-	switch (arg->i) {
-	case SPLIT_HOR:
-		win->w = ctab->w->w / 2;
-		win->h = ctab->w->h;
-		ctab->w->w = win->w + ctab->w->w % 2;
-		win->x = ctab->w->x + ctab->w->w;
-		break;
-	case SPLIT_VER:
-		win->w = ctab->w->w;
-		win->h = ctab->w->h / 2;
-		ctab->w->h = win->h + ctab->w->h % 2;
-		win->y = ctab->w->y + ctab->w->h;
-		break;
-	default:
-		die("unreachable");
-	}
-
-	set_row(win, win->p.row);
-	set_row(ctab->w, ctab->w->p.row);
-
-	win->prv = ctab->w;
-	win->prv->split = arg->i;
-	ctab->w = win;
-	ctab->w->split = arg->i;
-}
-
-void
 suspend(const union arg *arg)
 {
 	sctui_fini();
 	sctui_close_alt_screen();
 	sctui_commit();
 	kill(0, SIGSTOP);
-	for (int i = 0; i < ctab->wins.n; i++)
-		ctab->wins.e[i]->refresh = 1;
+	refreshw(&ctab->mw);
+	if (ctab->enable_tmpw)
+		refreshw(&ctab->tmpw);
 	sctui_init();
 	sctui_open_alt_screen();
 	sctui_commit();
+}
+
+void
+toggle_tmp_win(const union arg *arg)
+{
+	struct win *mw, *w;
+
+	mw = &ctab->mw;
+	w = &ctab->tmpw;
+
+	if (ctab->w == &ctab->tmpw || ctab->enable_tmpw) {
+		mw->h += w->h;
+		ctab->enable_tmpw = 0;
+		xfocus_win(mw);
+		return;
+	}
+
+	memcpy(w, mw, sizeof(*w));
+
+	w->w = mw->w;
+	w->h = mw->h / 2;
+	mw->h = w->h + mw->h % 2;
+	w->y = mw->y + mw->h;
+
+	set_row(w, w->p.row);
+	set_row(mw, mw->p.row);
+
+	ctab->enable_tmpw = 1;
+
+	/* it will call toggle_tmp_win(),
+	 * so ctab->enable_tmp must be set before */
+	xfocus_win(w);
 }
 
 void
@@ -1561,7 +1589,7 @@ cmd_buffer(int argc, const char *argv[])
 		return;
 	}
 
-	split_win(&ARG(.i = SPLIT_VER));
+	xfocus_win(&ctab->tmpw);
 
 	fb = tmp_fbuf();
 
@@ -1632,7 +1660,7 @@ cmd_marks(int argc, const char *argv[])
 	struct fbuf *fb;
 	struct line *l;
 
-	split_win(&ARG(.i = SPLIT_VER));
+	xfocus_win(&ctab->tmpw);
 
 	fb = tmp_fbuf();
 
@@ -1683,40 +1711,22 @@ cmd_quit(int argc, const char *argv[])
 {
 	struct fbuf *fb;
 	int using = 0;
-	struct win *w;
 
-	if (ctab->wins.n <= 1) {
+	if (ctab->w == &ctab->mw) {
 		running = 0;
 		return;
 	}
 
-	w = ctab->w;
-	ctab->w = ctab->w->prv;
-	switch (w->split) {
-	case SPLIT_HOR:
-		ctab->w->w += w->w;
-		break;
-	case SPLIT_VER:
-		ctab->w->h += w->h;
-		break;
-	}
-	refreshw(ctab->w);
-	fb = w->p.fb;
-	free(w);
-	for (int i = 0; i < ctab->wins.n; i++) {
-		if (ctab->wins.e[i] == w) {
-			darr_remove(&ctab->wins, i);
-			break;
-		}
-	}
+	toggle_tmp_win(0);
 
+	fb = ctab->tmpw.p.fb;
 	if (!fb->tmp)
 		return;
 
-	for (int i = 0; i < tabs.n; i++)
-		for (int j = 0; j < tabs.e[i]->wins.n; j++)
-			using += tabs.e[i]->wins.e[j]->p.fb == fb;
-	using += 1; /* current */
+	for (int i = 0; i < tabs.n; i++) {
+		using += tabs.e[i]->mw.p.fb == fb;
+		using += tabs.e[i]->tmpw.p.fb == fb;
+	}
 
 	if (using > 1)
 		return;
