@@ -690,49 +690,6 @@ new_undo(struct fbuf *fb)
 }
 
 void
-new_line(const union arg *arg)
-{
-	struct edit e;
-	e.beg = ctab->w->p;
-	e.beg.col = ctab->w->p.l->s.len - 1;
-	e.end = e.beg;
-	estr_from_cstr(&e.replace, "\n");
-	edit(NULL, &e);
-	str_free(&e.replace);
-	has_sel = NULL;
-}
-
-void
-paste(const union arg *arg)
-{
-	char **reg = get_reg(arg->s[0]);
-	if (arg->s[0] == '+') {
-		if (*reg)
-			free(*reg);
-		*reg = sys_paste();
-	}
-	if (!reg || !*reg)
-		return;
-	if (!arg->s[1])
-		move_col(&ARG(.i = 1));
-	insert(&ARG(.s = *reg));
-}
-
-void
-redo(const union arg *arg)
-{
-	struct edit e;
-	struct fbuf *fb = ctab->w->p.fb;
-	struct undo *u;
-	if (!fb->undo.end->nex)
-		return;
-	u = undoof(fb->undo.end->nex);
-	e = u->e;
-	str_empty(&u->e.replace);
-	edit(NULL, &e);
-}
-
-void
 refreshl(struct win *w, struct line *l)
 {
 	*l->r = 0;
@@ -1427,6 +1384,59 @@ move_row(const union arg *arg)
 }
 
 void
+new_line(const union arg *arg)
+{
+	struct edit e;
+	e.beg = ctab->w->p;
+	e.beg.col = ctab->w->p.l->s.len - 1;
+	e.end = e.beg;
+	estr_from_cstr(&e.replace, "\n");
+	edit(NULL, &e);
+	str_free(&e.replace);
+	has_sel = NULL;
+}
+
+void
+paste(const union arg *arg)
+{
+	char **reg = get_reg(arg->s[0]);
+	if (arg->s[0] == '+') {
+		if (*reg)
+			free(*reg);
+		*reg = sys_paste();
+	}
+	if (!reg || !*reg)
+		return;
+	if (!arg->s[1])
+		move_col(&ARG(.i = 1));
+	insert(&ARG(.s = *reg));
+}
+
+void
+redo(const union arg *arg)
+{
+	struct edit e;
+	struct fbuf *fb = ctab->w->p.fb;
+	struct undo *u;
+	if (!fb->undo.end->nex)
+		return;
+	u = undoof(fb->undo.end->nex);
+	e = u->e;
+	str_empty(&u->e.replace);
+	edit(NULL, &e);
+}
+
+void
+redraw(const union arg *arg)
+{
+	sctui_clear();
+	refreshw(&ctab->mw);
+	if (ctab->enable_tmpw)
+		refreshw(&ctab->tmpw);
+	refreshw(&bar);
+}
+
+void
 search(const union arg *arg)
 {
 	int (*fn)(void) = search_nex;
@@ -1515,9 +1525,7 @@ suspend(const union arg *arg)
 	sctui_close_alt_screen();
 	sctui_commit();
 	kill(0, SIGSTOP);
-	refreshw(&ctab->mw);
-	if (ctab->enable_tmpw)
-		refreshw(&ctab->tmpw);
+	redraw(0);
 	sctui_init();
 	sctui_open_alt_screen();
 	sctui_commit();

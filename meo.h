@@ -97,6 +97,7 @@ static void move_row(const union arg *arg);
 static void new_line(const union arg *arg);
 static void paste(const union arg *arg);
 static void redo(const union arg *arg);
+static void redraw(const union arg *arg);
 static void search(const union arg *arg);
 static void sel(const union arg *arg);
 static void sel_line(const union arg *arg);
