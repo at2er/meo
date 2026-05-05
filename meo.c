@@ -1,6 +1,7 @@
 #include <assert.h>
 #include <ctype.h>
 #include <errno.h>
+#include <libgen.h>
 #include <limits.h>
 #include <poll.h>
 #include <regex.h>
@@ -36,6 +37,7 @@ struct selection {
 	int first_len, last_len;
 };
 
+static void clean_cmdbuf(void);
 static void comp_pattern(const char *p, int len);
 static void draw(void);
 static void draw_line(struct win *w, struct line *l, int row, int beg, int end);
@@ -128,6 +130,16 @@ static int running = 1;
 static const char *entry;
 
 #include "config.h"
+
+void
+clean_cmdbuf(void)
+{
+	struct line *l = lineof(cmdbuf.lines.end);
+	l->s.s[0] = '\n';
+	l->s.s[1] = '\0';
+	l->s.len = 1;
+	*l->r = '\0';
+}
 
 void
 comp_pattern(const char *p, int len)
@@ -744,6 +756,7 @@ clean:
 		free(l);
 	}
 
+	free(fb->_name);
 	free(fb);
 }
 
@@ -803,8 +816,10 @@ request_key(void)
 void
 ruler(void)
 {
+	char *buf = sbuf;
 	struct line *l;
 	int len, padding;
+	struct marker *p = &ctab->w->p;
 
 	l = lineof(rulerbuf.lines.beg);
 
@@ -812,9 +827,30 @@ ruler(void)
 	if (ctab->w == &bar)
 		return;
 
-	len = snprintf(sbuf, BUFSIZ, "%d,%d", ctab->w->p.row, ctab->w->p.col);
+	memset(buf, ' ', bar.w);
 
-	padding = global_sctui.w - len - skb_ncombo - 4;
+	for (int i = 0; i < skb_ncombo; i++) {
+		switch (skb_combo[i]) {
+		case ' ':
+			*buf++ = '/';
+			*buf++ = 's';
+			break;
+		default:
+			*buf++ = skb_combo[i];
+			break;
+		}
+	}
+
+	buf++;
+	buf += snprintf(buf, BUFSIZ - (buf - sbuf), "%d,%d",
+			p->row,
+			p->col);
+	len = buf - sbuf;
+
+	padding = global_sctui.w - len - strlen(p->fb->name) - 2;
+	estr_append_cstr(&l->s, p->fb->name);
+	estr_append_cstr(&l->s, "  ");
+
 	if (mode_str[cmode]) {
 		padding -= strlen(mode_str[cmode]);
 		estr_append_cstr(&l->s, mode_str[cmode]);
@@ -822,10 +858,6 @@ ruler(void)
 
 	for (int i = 0; i < padding; i++)
 		estr_append_chr(&l->s, ' ');
-
-	for (int i = 0; i < skb_ncombo; i++)
-		estr_append_chr(&l->s, skb_combo[i]);
-	estr_append_cstr(&l->s, "    ");
 
 	estr_append_cstr(&l->s, sbuf);
 
@@ -934,6 +966,7 @@ sel_word_prv(const char **beg, const char **end)
 void
 set_bar_buf(struct fbuf *fb)
 {
+	clean_cmdbuf();
 	bar.p.fb = fb;
 	bar.p.l = bar.draw = lineof(fb->lines.beg);
 	set_col(&bar, 0);
@@ -1144,9 +1177,7 @@ cmd(const union arg *arg)
 		dup = strdup(bar.p.l->s.s);
 		if (dup[bar.p.l->s.len - 1] == '\n')
 			dup[bar.p.l->s.len - 1] = '\0';
-		bar.p.l->s.s[0] = '\n';
-		bar.p.l->s.s[1] = '\0';
-		bar.p.l->s.len = 1;
+		clean_cmdbuf();
 		refreshl(&bar, bar.p.l);
 	}
 
@@ -1630,8 +1661,11 @@ cmd_edit(int argc, const char *argv[])
 	darr_append(&fbs, fb);
 
 	if (argc <= 1) {
-		strcpy(fb->path, "<unnamed>");
+		fb->name = fb->_name = strdup("<unnamed>");
+		strcpy(fb->path, fb->name);
 	} else {
+		fb->_name = strdup(argv[1]);
+		fb->name = basename(fb->_name);
 		strcpy(fb->path, argv[1]);
 	}
 

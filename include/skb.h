@@ -120,6 +120,7 @@ _skb_compare_key(const char *key, int pressed)
 	SPECIAL(127, '/', 'b') else
 	SPECIAL(13,  '/', 'r') else
 	SPECIAL(27,  '/', 'e') else
+	SPECIAL(' ', '/', 's') else
 	SPECIAL('/', '/', '/') else
 	SPECIAL('^', '^', '^') else
 	if (iscntrl(pressed)) {

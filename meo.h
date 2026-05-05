@@ -35,6 +35,7 @@ struct edit {
 struct fbuf {
 	struct utilsh_list_head lines;
 	int nline;
+	char *name, *_name;
 	char path[FILENAME_MAX];
 
 	unsigned int ldirty:1, /* lines dirty */
