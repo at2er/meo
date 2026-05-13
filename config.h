@@ -102,5 +102,6 @@ static struct cmd cmds[] = {
 	{"marks",    "ms",   cmd_marks  },
 	{"write",    "w",    cmd_write  },
 	{"quit",     "q",    cmd_quit   },
+	{"shell",    "sh",   cmd_shell  },
 	{NULL,       NULL,   NULL       }
 };

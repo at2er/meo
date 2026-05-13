@@ -2,6 +2,7 @@
 #include "str.h"
 
 #define VLINE_RENDER_MAX 2048
+#define DEFAULT_PFB_LINE_SIZ 128
 
 enum { FOCUS_PRV, FOCUS_MAIN, FOCUS_TMP };
 enum { GOTO_IN_FILE, GOTO_IN_LINE };
@@ -39,7 +40,8 @@ struct fbuf {
 	char path[FILENAME_MAX];
 
 	unsigned int ldirty:1, /* lines dirty */
-	             tmp:1;    /* auto remove after quit */
+	             tmp:1,    /* auto remove after quit */
+	             poll:1;
 
 	struct marker pos;
 
@@ -62,8 +64,8 @@ struct win {
 	int x, y, w, h;
 };
 
-typedef darr(struct tab  *) tab_arr;
-typedef darr(struct win  *) win_arr;
+typedef darr(struct tab *) tab_arr;
+typedef darr(struct win *) win_arr;
 struct tab {
 	struct win *w,  /* current window */
 	            mw, /* main window */
@@ -113,3 +115,4 @@ static void cmd_edit(int argc, const char *argv[]);
 static void cmd_marks(int argc, const char *argv[]);
 static void cmd_write(int argc, const char *argv[]);
 static void cmd_quit(int argc, const char *argv[]);
+static void cmd_shell(int argc, const char *argv[]);

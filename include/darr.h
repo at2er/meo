@@ -6,8 +6,13 @@
 #include <stddef.h>
 #include <string.h>
 
-#ifndef UTILSH_DARR_REALLOC
-#define UTILSH_DARR_REALLOC realloc
+#ifndef darr_realloc
+#define darr_realloc realloc
+#include <stdlib.h>
+#endif
+
+#ifndef darr_free
+#define darr_free free
 #include <stdlib.h>
 #endif
 
@@ -43,6 +48,12 @@
 
 #define darr_remove(DARR, POS) \
 	do { \
+		if ((DARR)->n == 1) { \
+			darr_free((DARR)->e); \
+			(DARR)->e = NULL; \
+			(DARR)->n = 0; \
+			break; \
+		} \
 		if ((DARR)->n <= 0) \
 			break; \
 		memmove((DARR)->e + (POS), \
@@ -56,7 +67,7 @@
 		if ((DARR)->n == (N)) \
 			break; \
 		(DARR)->n = (N); \
-		(DARR)->e = UTILSH_DARR_REALLOC((DARR)->e, \
+		(DARR)->e = darr_realloc((DARR)->e, \
 				(DARR)->n * sizeof(*(DARR)->e)); \
 	} while (0)
 

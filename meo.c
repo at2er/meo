@@ -67,6 +67,7 @@ static void keypress(int k);
 static int match(const char *str);
 static int mode_can_insert(void);
 static struct undo *new_undo(struct fbuf *fb);
+static struct fbuf *poll_fbuf(int fd, const char *name);
 static void refreshl(struct win *w, struct line *l);
 static void remove_fbuf(struct fbuf *fb);
 static void remove_line(struct fbuf *fb, struct line *l);
@@ -84,6 +85,7 @@ static void set_row(struct win *w, int row);
 static void sys_copy(const char *s);
 static char *sys_paste(void);
 static struct fbuf *tmp_fbuf(void);
+static void update_poll_fbuf(int idx);
 static void xfocus_win(struct win *w);
 static void xgoto_mark(struct marker *m);
 
@@ -100,6 +102,7 @@ static struct option opts[] = {
 };
 
 static fb_arr  fbs;
+static fb_arr  pfbs; /* poll fbuf */
 static tab_arr tabs;
 
 static struct win bar;
@@ -123,7 +126,8 @@ static struct line *matched;
 static regmatch_t matches[MAX_MACHES];
 static regex_t *pattern;
 
-static struct pollfd fds[1];
+typedef darr(struct pollfd) pollfd_arr;
+static pollfd_arr pfds;
 static char sbuf[BUFSIZ];
 static int running = 1;
 
@@ -571,8 +575,10 @@ init(void)
 
 	while (waitpid(-1, NULL, WNOHANG) > 0);
 
-	fds[0].fd = STDIN_FILENO;
-	fds[0].events = POLLIN;
+	darr_init(&pfds);
+	darr_expand(&pfds);
+	pfds.e[0].fd = STDIN_FILENO;
+	pfds.e[0].events = POLLIN;
 
 	ctab = ecalloc(1, sizeof(*ctab));
 	ctab->w = &ctab->mw;
@@ -671,6 +677,29 @@ mode_can_insert(void)
 	return 0;
 }
 
+struct fbuf *
+poll_fbuf(int fd, const char *name)
+{
+	struct fbuf *fb = ecalloc(1, sizeof(*fb));
+	struct line *l = empty_line();
+
+	fb->nline = 1;
+	list_init(&fb->lines);
+	list_insert(&fb->lines, fb->lines.end, &l->link);
+
+	darr_append(&fbs, fb);
+	darr_append(&pfbs, fb);
+	darr_expand(&pfds);
+	darr_last(&pfds).fd = fd;
+	darr_last(&pfds).events = POLLIN;
+
+	strcpy(fb->path, name ? name : "<poll>");
+	fb->poll = 1;
+	fb->pos.fb = fb;
+
+	return fb;
+}
+
 struct undo *
 new_undo(struct fbuf *fb)
 {
@@ -693,7 +722,8 @@ void
 refreshl(struct win *w, struct line *l)
 {
 	*l->r = 0;
-	refreshw(w);
+	if (w)
+		refreshw(w);
 }
 
 void
@@ -763,9 +793,17 @@ request_key(void)
 {
 	draw();
 
-	if (poll(fds, 1, -1) == -1 && errno != EINTR)
+	if (poll(pfds.e, pfds.n, -1) == -1 && errno != EINTR)
 		die("poll()");
-	if (!(fds[0].revents & POLLIN))
+	for (int i = 1; i < pfds.n; i++) {
+		if (pfds.e[i].revents & POLLIN)
+			update_poll_fbuf(i);
+		if (pfds.e[i].revents & POLLHUP) {
+			darr_remove(&pfbs, i - 1);
+			darr_remove(&pfds, i);
+		}
+	}
+	if (!(pfds.e[0].revents & POLLIN))
 		return 0;
 	return sctui_grab_key();
 }
@@ -773,7 +811,7 @@ request_key(void)
 void
 ruler(void)
 {
-	char *buf = sbuf;
+	char *buf = sbuf, *fname;
 	struct line *l;
 	int len, padding;
 	struct marker *p = &ctab->w->p;
@@ -804,8 +842,11 @@ ruler(void)
 			p->col);
 	len = buf - sbuf;
 
-	padding = global_sctui.w - len - strlen(p->fb->name) - 2;
-	estr_append_cstr(&l->s, p->fb->name);
+	fname = p->fb->name;
+	if (!fname)
+		fname = p->fb->path;
+	padding = global_sctui.w - len - strlen(fname) - 2;
+	estr_append_cstr(&l->s, fname);
 	estr_append_cstr(&l->s, "  ");
 
 	if (mode_str[cmode]) {
@@ -1055,6 +1096,35 @@ tmp_fbuf(void)
 	fb->pos.fb = fb;
 
 	return fb;
+}
+
+void
+update_poll_fbuf(int idx)
+{
+	struct fbuf *fb = pfbs.e[idx - 1];
+	struct pollfd *fd = &pfds.e[idx];
+	struct line *l = lineof(fb->lines.end);
+	int r;
+
+	if (!(r = read(fd->fd, sbuf, sizeof(sbuf) - 1)))
+		return;
+	for (int i = 0; i < r; i++) {
+		estr_insert_chr(&l->s, l->s.len - 1, sbuf[i]);
+		refreshl(NULL, l);
+		if (sbuf[i] == '\n') {
+			l = empty_line();
+			estr_expand_siz(&l->s, DEFAULT_PFB_LINE_SIZ);
+			list_insert(&fb->lines, fb->lines.end, &l->link);
+			fb->nline++;
+		}
+	}
+
+	for (int i = 0; i < tabs.n; i++) {
+		if (tabs.e[i]->mw.p.fb == fb)
+			refreshw(&tabs.e[i]->mw);
+		else if (tabs.e[i]->tmpw.p.fb == fb)
+			refreshw(&tabs.e[i]->tmpw);
+	}
 }
 
 void
@@ -1775,6 +1845,32 @@ cmd_quit(int argc, const char *argv[])
 		return;
 
 	remove_fbuf(fb);
+}
+
+void
+cmd_shell(int argc, const char *argv[])
+{
+	struct fbuf *fb;
+	int fds[2];
+
+	if (pipe(fds) < 0)
+		die("pipe()");
+
+	if (fork() == 0) {
+		set_child();
+		close(fds[0]);
+		if (dup2(fds[1], STDOUT_FILENO) < 0)
+			die("dup2()");
+		close(fds[1]);
+		execvp(argv[1], (char**)(argv + 1));
+		die("execvp()");
+	}
+
+	close(fds[1]);
+
+	fb = poll_fbuf(fds[0], NULL);
+	xfocus_win(&ctab->tmpw);
+	xgoto_mark(&fb->pos);
 }
 
 int

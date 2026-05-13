@@ -70,6 +70,11 @@ extern struct str *str_from_cstr(struct str *s, const char *cstr);
  * @return: [s], if it succeeds, otherwise NULL. */
 extern struct str *str_from_str(struct str *s, struct str *src);
 
+/* Insert [c] to the content of [dst] before [pos].
+ *
+ * @return: [dst], if it succeeds, otherwise NULL. */
+extern struct str *str_insert_chr(struct str *dst, size_t pos, char c);
+
 /* Insert [cstr] to the content of [dst] before [pos].
  * For example (not really code):
  *     s = "co"
@@ -145,6 +150,9 @@ extern struct str *estr_from_cstr(struct str *s, const char *cstr);
  *
  * @return: [s] */
 extern struct str *estr_from_str(struct str *s, struct str *src);
+
+/* @return: [dst] */
+extern struct str *estr_insert_chr(struct str *dst, size_t pos, char c);
 
 /* @return: [dst] */
 extern struct str *estr_insert_cstr(struct str *dst, size_t pos, const char *cstr);
@@ -283,6 +291,19 @@ str_from_str(struct str *s, struct str *src)
 }
 
 struct str *
+str_insert_chr(struct str *dst, size_t pos, char c)
+{
+	char s[2];
+	struct str fake;
+	s[0] = c;
+	s[1] = '\0';
+	fake.s = s;
+	fake.len = 1;
+	fake.siz = 2;
+	return str_insert_str(dst, pos, &fake);
+}
+
+struct str *
 str_insert_cstr(struct str *dst, size_t pos, const char *cstr)
 {
 	struct str fake;
@@ -390,6 +411,10 @@ estr_from_cstr(struct str *s, const char *cstr)
 struct str *
 estr_from_str(struct str *s, struct str *src)
 	T(str_from_str, s, src)
+
+struct str *
+estr_insert_chr(struct str *dst, size_t pos, char c)
+	T(str_insert_chr, dst, pos, c)
 
 struct str *
 estr_insert_cstr(struct str *dst, size_t pos, const char *cstr)
