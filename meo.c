@@ -1172,6 +1172,8 @@ backspace(const union arg *arg)
 	int pos = ctab->w->p.col - arg->i;
 	e.beg = e.end = ctab->w->p;
 	if (pos < 0) {
+		if (!e.beg.l->link.prv)
+			return;
 		e.beg.l = lineof(e.beg.l->link.prv);
 		e.beg.row--;
 		e.beg.col = e.beg.l->s.len - 1;
