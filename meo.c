@@ -1280,6 +1280,8 @@ find_nex(const union arg *arg)
 
 	jumping();
 	while (*c) {
+		if (*c == k)
+			break;
 		if (*c == '\n') {
 			if (arg->i) {
 				move_row(&ARG(.i = 1));
@@ -1289,8 +1291,6 @@ find_nex(const union arg *arg)
 				return;
 			}
 		}
-		if (*c == k)
-			break;
 		c++;
 	}
 

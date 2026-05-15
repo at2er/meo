@@ -118,7 +118,7 @@ _skb_compare_key(const char *key, int pressed)
 		return 0; \
 	}
 	SPECIAL(127, '/', 'b') else
-	SPECIAL(13,  '/', 'r') else
+	SPECIAL(10,  '/', 'r') else
 	SPECIAL(27,  '/', 'e') else
 	SPECIAL(' ', '/', 's') else
 	SPECIAL('/', '/', '/') else

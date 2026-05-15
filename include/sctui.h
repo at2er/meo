@@ -222,6 +222,8 @@ sctui_grab_key(void)
 {
 	char buf[1];
 	read(STDIN_FILENO, buf, 1);
+	if (*buf == 13)
+		return 10;
 	return *buf;
 }
 
