@@ -314,13 +314,15 @@ edit(struct str *buf, struct edit *e)
 
 	set_col(ctab->w, sel.beg->col);
 
-	if (!e->replace.s) {
+	if (e->replace.s)
+		edit_insert(u, e);
+	else {
 		u->e.end = u->e.beg;
-		return u;
+		u->e.at.fb = NULL;
 	}
 
-	edit_insert(u, e);
-
+	if (e->at.fb)
+		xgoto_mark(&e->at);
 	return u;
 }
 
@@ -361,6 +363,7 @@ edit_insert(struct undo *u, struct edit *e)
 	set_col(ctab->w, p->col);
 
 	u->e.end = *p;
+	u->e.at = u->e.beg;
 
 	/* don't free() it */
 	str_empty(&u->e.replace);
@@ -1159,7 +1162,7 @@ void
 concat_line(const union arg *arg)
 {
 	struct edit e;
-	e.beg = e.end = ctab->w->p;
+	e.at = e.beg = e.end = ctab->w->p;
 	e.end.l = lineof(e.end.l->link.nex);
 	e.end.row++;
 	e.end.col = 0;
@@ -1172,7 +1175,7 @@ backspace(const union arg *arg)
 {
 	struct edit e;
 	int pos = ctab->w->p.col - arg->i;
-	e.beg = e.end = ctab->w->p;
+	e.at = e.beg = e.end = ctab->w->p;
 	if (pos < 0) {
 		if (!e.beg.l->link.prv)
 			return;
@@ -1256,6 +1259,7 @@ delete(const union arg *arg)
 		return;
 	}
 
+	e.at.fb = NULL;
 	e.beg = ctab->w->p;
 	if (has_sel) {
 		e.end = SEL_MARKER;
@@ -1396,6 +1400,7 @@ void
 insert(const union arg *arg)
 {
 	struct edit e;
+	e.at.fb = NULL;
 	e.beg = e.end = ctab->w->p;
 	estr_from_cstr(&e.replace, arg->s);
 	edit(NULL, &e);
@@ -1461,8 +1466,13 @@ void
 new_line(const union arg *arg)
 {
 	struct edit e;
+	e.at.fb = NULL;
 	e.beg = ctab->w->p;
-	e.beg.col = ctab->w->p.l->s.len - 1;
+	if (arg->i < 0) {
+		e.beg.col = 0;
+		e.at = e.beg;
+	} else
+		e.beg.col = e.beg.l->s.len - 1;
 	e.end = e.beg;
 	estr_from_cstr(&e.replace, "\n");
 	edit(NULL, &e);

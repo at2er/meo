@@ -29,7 +29,7 @@ struct marker {
 };
 
 struct edit {
-	struct marker beg, end; /* range */
+	struct marker beg, end, at; /* range */
 	struct str replace;
 };
 
