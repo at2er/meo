@@ -68,6 +68,7 @@ static int match(const char *str);
 static int mode_can_insert(void);
 static struct undo *new_undo(struct fbuf *fb);
 static struct fbuf *poll_fbuf(int fd, const char *name);
+static char *read_from_cmd(const char **cmd);
 static void refreshl(struct win *w, struct line *l);
 static void remove_fbuf(struct fbuf *fb);
 static void remove_line(struct fbuf *fb, struct line *l);
@@ -86,6 +87,7 @@ static void sys_copy(const char *s);
 static char *sys_paste(void);
 static struct fbuf *tmp_fbuf(void);
 static void update_poll_fbuf(int idx);
+static void write_to_cmd(const char **cmd, const char *s);
 static void xfocus_win(struct win *w);
 static void xgoto_mark(struct marker *m);
 
@@ -723,6 +725,34 @@ new_undo(struct fbuf *fb)
 	return u;
 }
 
+char *
+read_from_cmd(const char **cmd)
+{
+	int fds[2], r;
+	struct str result;
+
+	if (pipe(fds) < 0)
+		die("pipe()");
+
+	if (fork() == 0) {
+		set_child();
+		close(fds[0]);
+		if (dup2(fds[1], STDOUT_FILENO) < 0)
+			die("dup2()");
+		close(fds[1]);
+		execvp(cmd[0], (char**)cmd);
+		die("execvp()");
+	}
+
+	str_empty(&result);
+	close(fds[1]);
+	while ((r = read(fds[0], sbuf, sizeof(sbuf) - 1)))
+		estr_append_str(&result, &STR(sbuf, r));
+	close(fds[0]);
+
+	return result.s;
+}
+
 void
 refreshl(struct win *w, struct line *l)
 {
@@ -1032,60 +1062,19 @@ set_row(struct win *w, int row)
 void
 sys_copy(const char *s)
 {
-	const char **cmd = NULL;
-	int fds[2];
-
-	if (!(cmd = sys_copy_cmd()))
+	const char **cmd = sys_copy_cmd();
+	if (!cmd)
 		return;
-
-	if (pipe(fds) < 0)
-		die("pipe()");
-
-	if (fork() == 0) {
-		set_child();
-		close(fds[1]);
-		if (dup2(fds[0], STDIN_FILENO) < 0)
-			die("dup2()");
-		close(fds[0]);
-		execvp(cmd[0], (char**)cmd);
-		die("execvp()");
-	}
-
-	close(fds[0]);
-	write(fds[1], s, strlen(s));
-	close(fds[1]);
+	write_to_cmd(cmd, s);
 }
 
 char *
 sys_paste(void)
 {
-	const char **cmd = NULL;
-	int fds[2], r;
-	struct str result;
-
-	if (!(cmd = sys_paste_cmd()))
+	const char **cmd = sys_paste_cmd();
+	if (!cmd)
 		return NULL;
-
-	if (pipe(fds) < 0)
-		die("pipe()");
-
-	if (fork() == 0) {
-		set_child();
-		close(fds[0]);
-		if (dup2(fds[1], STDOUT_FILENO) < 0)
-			die("dup2()");
-		close(fds[1]);
-		execvp(cmd[0], (char**)cmd);
-		die("execvp()");
-	}
-
-	str_empty(&result);
-	close(fds[1]);
-	while ((r = read(fds[0], sbuf, sizeof(sbuf) - 1)))
-		estr_append_str(&result, &STR(sbuf, r));
-	close(fds[0]);
-
-	return result.s;
+	return read_from_cmd(cmd);
 }
 
 struct fbuf *
@@ -1130,6 +1119,29 @@ update_poll_fbuf(int idx)
 		else if (tabs.e[i]->tmpw.p.fb == fb)
 			refreshw(&tabs.e[i]->tmpw);
 	}
+}
+
+void
+write_to_cmd(const char **cmd, const char *s)
+{
+	int fds[2];
+
+	if (pipe(fds) < 0)
+		die("pipe()");
+
+	if (fork() == 0) {
+		set_child();
+		close(fds[1]);
+		if (dup2(fds[0], STDIN_FILENO) < 0)
+			die("dup2()");
+		close(fds[0]);
+		execvp(cmd[0], (char**)cmd);
+		die("execvp()");
+	}
+
+	close(fds[0]);
+	write(fds[1], s, strlen(s));
+	close(fds[1]);
 }
 
 void
