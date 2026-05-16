@@ -59,6 +59,7 @@ static const struct key normal_keys[] = {
 	{"r",    redo,        {0}                },
 	{"v",    sel,         {0}                },
 	{"w",    sel_word,    {.i = 1}           },
+	{"x",    swap_sel,    {0}                },
 	{"y",    yank,        {.i = '+'}         },
 	{"'",    goto_mark,   {0}                },
 	{"//",   mode,        {.i = MODE_SEARCH} },

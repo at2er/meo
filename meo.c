@@ -1616,6 +1616,14 @@ suspend(const union arg *arg)
 }
 
 void
+swap_sel(const union arg *arg)
+{
+	struct marker save = ctab->w->p;
+	xgoto_mark(&SEL_MARKER);
+	SEL_MARKER = save;
+}
+
+void
 toggle_tmp_win(const union arg *arg)
 {
 	struct win *mw, *w;

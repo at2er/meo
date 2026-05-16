@@ -105,6 +105,7 @@ static void sel(const union arg *arg);
 static void sel_line(const union arg *arg);
 static void sel_word(const union arg *arg);
 static void suspend(const union arg *arg);
+static void swap_sel(const union arg *arg);
 static void toggle_tmp_win(const union arg *arg);
 static void undo(const union arg *arg);
 static void yank(const union arg *arg);
