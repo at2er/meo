@@ -80,7 +80,6 @@ static int search_prv(void);
 static void sel_word_nex(const char **beg, const char **end);
 static void sel_word_prv(const char **beg, const char **end);
 static void set_bar_buf(struct fbuf *fb);
-static void set_child(void);
 static void set_col(struct win *w, int col);
 static void set_row(struct win *w, int row);
 static void sys_copy(const char *s);
@@ -141,6 +140,8 @@ void
 clean_cmdbuf(void)
 {
 	struct line *l = lineof(cmdbuf.lines.end);
+	if (!l)
+		return;
 	l->s.s[0] = '\n';
 	l->s.s[1] = '\0';
 	l->s.len = 1;
@@ -521,11 +522,10 @@ get_minmax_marker(struct marker **beg, struct marker **end)
 char **
 get_reg(int k)
 {
-	if (k == '+') {
+	if (k == '+')
 		k = 0;
-	} else {
+	else
 		return NULL;
-	}
 	return &regs[k];
 }
 
@@ -599,17 +599,14 @@ init(void)
 	ctab->w->h = global_sctui.h - 1;
 
 	empty_fbuf(&rulerbuf);
+	rulerbuf.nline = 1;
 	empty_fbuf(&cmdbuf);
 
 	memset(&bar, 0, sizeof(bar));
-	bar.x = 0;
 	bar.y = global_sctui.h - 1;
 	bar.w = global_sctui.w;
 	bar.h = 1;
-	bar.p.fb = &rulerbuf;
-	bar.p.fb->nline = 1;
-	bar.p.l = bar.draw = lineof(bar.p.fb->lines.beg);
-	refreshw(&bar);
+	set_bar_buf(&rulerbuf);
 
 	if (!entry)
 		cmd_edit(0, NULL);
@@ -719,7 +716,6 @@ new_undo(struct fbuf *fb)
 		return u;
 	}
 
-
 	u = ecalloc(1, sizeof(*u));
 	list_insert(&fb->undo, fb->undo.end, &u->link);
 	return u;
@@ -735,7 +731,6 @@ read_from_cmd(const char **cmd)
 		die("pipe()");
 
 	if (fork() == 0) {
-		set_child();
 		close(fds[0]);
 		if (dup2(fds[1], STDOUT_FILENO) < 0)
 			die("dup2()");
@@ -873,8 +868,7 @@ ruler(void)
 
 	buf++;
 	buf += snprintf(buf, BUFSIZ - (buf - sbuf), "%d,%d",
-			p->row,
-			p->col);
+			p->row, p->col);
 	len = buf - sbuf;
 
 	fname = p->fb->name;
@@ -1007,25 +1001,14 @@ set_bar_buf(struct fbuf *fb)
 }
 
 void
-set_child(void)
-{
-	struct sigaction sa;
-	setsid();
-	sigemptyset(&sa.sa_mask);
-	sa.sa_flags = 0;
-	sa.sa_handler = SIG_DFL;
-	sigaction(SIGCHLD, &sa, NULL);
-}
-
-void
 set_col(struct win *w, int col)
 {
 	int max = 0;
-	if (ctab->w->p.l)
-		max = ctab->w->p.l->s.len - 1;
-	ctab->w->p.col = align(col, 0, max);
-	ctab->w->p.fb->pos.col = ctab->w->p.col;
-	refreshw(ctab->w);
+	if (w->p.l)
+		max = w->p.l->s.len - 1;
+	w->p.col = align(col, 0, max);
+	w->p.fb->pos.col = w->p.col;
+	refreshw(w);
 }
 
 void
@@ -1130,7 +1113,6 @@ write_to_cmd(const char **cmd, const char *s)
 		die("pipe()");
 
 	if (fork() == 0) {
-		set_child();
 		close(fds[1]);
 		if (dup2(fds[0], STDIN_FILENO) < 0)
 			die("dup2()");
@@ -1891,7 +1873,6 @@ cmd_shell(int argc, const char *argv[])
 		die("pipe()");
 
 	if (fork() == 0) {
-		set_child();
 		close(fds[0]);
 		if (dup2(fds[1], STDOUT_FILENO) < 0)
 			die("dup2()");
