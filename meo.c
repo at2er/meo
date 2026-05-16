@@ -527,8 +527,8 @@ get_reg(int k)
 int
 get_rx(struct win *w, struct line *l, int col)
 {
-	int rx = 0;
-	for (int i = 0; i < col; i++) {
+	int i, rx = 0;
+	for (i = 0; i < col && i < (int)l->s.len; i++) {
 		switch (l->s.s[i]) {
 		case '\t':
 			rx += strlen(tab_render);
@@ -538,6 +538,8 @@ get_rx(struct win *w, struct line *l, int col)
 			break;
 		}
 	}
+	if (i < col)
+		rx += col - i;
 	return w->x + rx;
 }
 
@@ -1862,6 +1864,8 @@ cmd_shell(int argc, const char *argv[])
 		set_child();
 		close(fds[0]);
 		if (dup2(fds[1], STDOUT_FILENO) < 0)
+			die("dup2()");
+		if (dup2(STDOUT_FILENO, STDERR_FILENO) < 0)
 			die("dup2()");
 		close(fds[1]);
 		execvp(argv[1], (char**)(argv + 1));
