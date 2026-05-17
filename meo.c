@@ -28,6 +28,11 @@
 #define MAX_MACHES 1
 
 #define ARG(...) (union arg){__VA_ARGS__}
+#define LISTEN_SIG(SIG, FLAGS, HANDLER) \
+		sigaction(SIG, &(struct sigaction){ \
+			.sa_flags = FLAGS, \
+			.sa_handler = HANDLER \
+		}, NULL)
 #define lineof(LINK) list_container_of(LINK, struct line, link)
 #define undoof(LINK) list_container_of(LINK, struct undo, link)
 #define refreshw(WREF) ((WREF)->refresh = 1)
@@ -74,6 +79,7 @@ static void remove_fbuf(struct fbuf *fb);
 static void remove_line(struct fbuf *fb, struct line *l);
 static void render_line(const struct win *w, struct line *l);
 static int request_key(void);
+static void resize(int sig);
 static void ruler(void);
 static int search_nex(void);
 static int search_prv(void);
@@ -86,9 +92,10 @@ static void sys_copy(const char *s);
 static char *sys_paste(void);
 static struct fbuf *tmp_fbuf(void);
 static void update_poll_fbuf(int idx);
+static void update_tab_wins(struct tab *tab);
 static void write_to_cmd(const char **cmd, const char *s);
 static void xfocus_win(struct win *w);
-static void xgoto_mark(struct marker *m);
+static void xgoto_mark(struct win *w, struct marker *m);
 
 static const char *usages[] = {
 "Usage: meo [OPTIONS] [FILE]",
@@ -325,7 +332,7 @@ edit(struct str *buf, struct edit *e)
 	}
 
 	if (e->at.fb)
-		xgoto_mark(&e->at);
+		xgoto_mark(ctab->w, &e->at);
 	return u;
 }
 
@@ -582,6 +589,8 @@ init(void)
 
 	while (waitpid(-1, NULL, WNOHANG) > 0);
 
+	LISTEN_SIG(SIGWINCH, SA_RESTART, resize);
+
 	darr_init(&pfds);
 	darr_expand(&pfds);
 	pfds.e[0].fd = STDIN_FILENO;
@@ -836,6 +845,17 @@ request_key(void)
 	if (!(pfds.e[0].revents & POLLIN))
 		return 0;
 	return sctui_grab_key();
+}
+
+void
+resize(int sig)
+{
+	sctui_update();
+	bar.y = global_sctui.h - 1;
+	bar.w = global_sctui.w;
+	for (int i = 0; i < tabs.n; i++)
+		update_tab_wins(tabs.e[i]);
+	redraw(0);
 }
 
 void
@@ -1105,6 +1125,22 @@ update_poll_fbuf(int idx)
 }
 
 void
+update_tab_wins(struct tab *tab)
+{
+	int maxh = global_sctui.h - 1;
+	tab->mw.h = maxh;
+	tab->mw.w = global_sctui.w;
+	if (tab->enable_tmpw) {
+		tab->tmpw.h = maxh / 2;
+		tab->tmpw.y = tab->tmpw.h + maxh % 2;
+		tab->tmpw.w = global_sctui.w;
+		tab->mw.h = tab->tmpw.y;
+		xgoto_mark(&tab->tmpw, &tab->tmpw.p);
+	}
+	xgoto_mark(&tab->mw, &tab->mw.p);
+}
+
+void
 write_to_cmd(const char **cmd, const char *s)
 {
 	int fds[2];
@@ -1139,16 +1175,16 @@ xfocus_win(struct win *w)
 }
 
 void
-xgoto_mark(struct marker *m)
+xgoto_mark(struct win *w, struct marker *m)
 {
-	ctab->w->p.fb = m->fb;
-	if (ctab->w->p.fb->ldirty || !m->l)
+	w->p.fb = m->fb;
+	if (w->p.fb->ldirty || !m->l)
 		m->l = get_line_nex(lineof(m->fb->lines.beg), m->row);
-	ctab->w->p.l = m->l;
-	ctab->w->p.row = m->row;
-	ctab->w->p.rowoff = m->rowoff;
-	set_row(ctab->w, m->row);
-	set_col(ctab->w, m->col);
+	w->p.l = m->l;
+	w->p.row = m->row;
+	w->p.rowoff = m->rowoff;
+	set_row(w, m->row);
+	set_col(w, m->col);
 }
 
 /* key functions */
@@ -1388,7 +1424,7 @@ goto_mark(const union arg *arg)
 	if (!m->fb)
 		return;
 
-	xgoto_mark(m);
+	xgoto_mark(ctab->w, m);
 }
 
 void
@@ -1543,7 +1579,7 @@ search(const union arg *arg)
 	if (fn())
 		return;
 
-	xgoto_mark(&orig);
+	xgoto_mark(ctab->w, &orig);
 	has_sel = NULL;
 }
 
@@ -1600,7 +1636,7 @@ void
 swap_sel(const union arg *arg)
 {
 	struct marker save = ctab->w->p;
-	xgoto_mark(&SEL_MARKER);
+	xgoto_mark(ctab->w, &SEL_MARKER);
 	SEL_MARKER = save;
 }
 
@@ -1613,23 +1649,16 @@ toggle_tmp_win(const union arg *arg)
 	w = &ctab->tmpw;
 
 	if (ctab->w == &ctab->tmpw || ctab->enable_tmpw) {
-		mw->h += w->h;
 		ctab->enable_tmpw = 0;
+		update_tab_wins(ctab);
 		xfocus_win(mw);
 		return;
 	}
 
 	memcpy(w, mw, sizeof(*w));
 
-	w->w = mw->w;
-	w->h = mw->h / 2;
-	mw->h = w->h + mw->h % 2;
-	w->y = mw->y + mw->h;
-
-	set_row(w, w->p.row);
-	set_row(mw, mw->p.row);
-
 	ctab->enable_tmpw = 1;
+	update_tab_wins(ctab);
 
 	/* it will call toggle_tmp_win(),
 	 * so ctab->enable_tmp must be set before */
@@ -1698,7 +1727,7 @@ cmd_buffer(int argc, const char *argv[])
 			return;
 		fb = fbs.e[idx];
 		fb->pos.fb = fb;
-		xgoto_mark(&fb->pos);
+		xgoto_mark(ctab->w, &fb->pos);
 		return;
 	}
 
@@ -1718,7 +1747,7 @@ cmd_buffer(int argc, const char *argv[])
 		list_insert(&fb->lines, fb->lines.end, &l->link);
 	}
 
-	xgoto_mark(&fb->pos);
+	xgoto_mark(ctab->w, &fb->pos);
 }
 
 void
@@ -1767,7 +1796,7 @@ cmd_edit(int argc, const char *argv[])
 	fclose(fp);
 setwin:
 	fb->pos.fb = fb;
-	xgoto_mark(&fb->pos);
+	xgoto_mark(ctab->w, &fb->pos);
 }
 
 void
@@ -1796,7 +1825,7 @@ cmd_marks(int argc, const char *argv[])
 		list_insert(&fb->lines, fb->lines.end, &l->link);
 	}
 
-	xgoto_mark(&fb->pos);
+	xgoto_mark(ctab->w, &fb->pos);
 
 	if (fb->nline == 0)
 		cmd_quit(0, NULL);
@@ -1874,7 +1903,7 @@ cmd_shell(int argc, const char *argv[])
 
 	fb = poll_fbuf(fds[0], NULL);
 	xfocus_win(&ctab->tmpw);
-	xgoto_mark(&fb->pos);
+	xgoto_mark(ctab->w, &fb->pos);
 }
 
 int
