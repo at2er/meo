@@ -15,6 +15,7 @@
 #include <sys/wait.h>
 #include <unistd.h>
 
+#include <grapheme.h>
 #define UTILSH_LIST_STRIP
 #define UTILSH_DARR_REALLOC erealloc
 #include "darr.h"
@@ -42,7 +43,15 @@ struct selection {
 	int first_len, last_len;
 };
 
+struct line_iter {
+	struct marker *begm, *endm;
+	struct line *l, *nex;
+	int beg, end, /* start and end col of line */
+	    row;
+};
+
 static void clean_cmdbuf(void);
+static int col2bcol(struct line *l, int col);
 static void comp_pattern(const char *p, int len);
 static void draw(void);
 static void draw_line(struct win *w, struct line *l, int row, int beg, int end);
@@ -67,6 +76,8 @@ static int get_rx(struct win *w, struct line *l, int col);
 static int get_ry(struct win *w, int row);
 static void get_sel(struct selection *sel);
 static void init(void);
+static void init_line_iter(struct line_iter *iter, struct marker *begm, struct marker *endm);
+static struct line_iter *iter_lines(struct line_iter *iter);
 static void jumping(void);
 static void keypress(int k);
 static int match(const char *str);
@@ -96,6 +107,7 @@ static void update_tab_wins(struct tab *tab);
 static void write_to_cmd(const char **cmd, const char *s);
 static void xfocus_win(struct win *w);
 static void xgoto_mark(struct win *w, struct marker *m);
+static int xstrlen(const char *s);
 
 static const char *usages[] = {
 "Usage: meo [OPTIONS] [FILE]",
@@ -155,6 +167,15 @@ clean_cmdbuf(void)
 	*l->r = '\0';
 }
 
+int
+col2bcol(struct line *l, int col)
+{
+	int bcol = 0;
+	for (; col; col--)
+		bcol += grapheme_next_character_break_utf8(l->s.s + bcol, l->s.len - bcol);
+	return bcol;
+}
+
 void
 comp_pattern(const char *p, int len)
 {
@@ -174,6 +195,7 @@ comp_pattern(const char *p, int len)
 void
 draw(void)
 {
+	int rx, ry;
 	draw_win(&ctab->mw);
 	if (ctab->enable_tmpw)
 		draw_win(&ctab->tmpw);
@@ -185,8 +207,9 @@ draw(void)
 
 	if (has_sel)
 		draw_sel();
-	sctui_move(get_rx(ctab->w, ctab->w->p.l, ctab->w->p.col),
-			get_ry(ctab->w, ctab->w->p.row));
+	rx = get_rx(ctab->w, ctab->w->p.l, ctab->w->p.col);
+	ry = get_ry(ctab->w, ctab->w->p.row);
+	sctui_move(rx, ry);
 
 	sctui_commit();
 }
@@ -202,29 +225,13 @@ draw_line(struct win *w, struct line *l, int row, int beg, int end)
 void
 draw_sel(void)
 {
-	struct line *l;
-	struct selection sel;
+	struct line_iter iter;
 
 	sctui_out(sctui_attr_on(sel_attr), 0);
 
-	sel.beg = &SEL_MARKER;
-	sel.end = &ctab->w->p;
-	get_sel(&sel);
-	l = sel.beg->l;
-	if (sel.first_len)
-		draw_line(ctab->w, l, sel.beg->row, sel.beg->col,
-				sel.beg->col + sel.first_len);
-
-	l = lineof(l->link.nex);
-	for (int i = sel.beg->row + 1; i < sel.end->row; i++) {
-		if (l->s.len <= 0)
-			continue;
-		draw_line(ctab->w, l, i, 0, l->s.len);
-		l = lineof(l->link.nex);
-	}
-
-	if (sel.last_len)
-		draw_line(ctab->w, l, sel.end->row, 0, sel.last_len);
+	init_line_iter(&iter, &SEL_MARKER, &ctab->w->p);
+	while (iter_lines(&iter))
+		draw_line(ctab->w, iter.l, iter.row, iter.beg, iter.end);
 
 	sctui_out(sctui_attr_off(), 0);
 }
@@ -270,59 +277,44 @@ dup_to_reg(int r, char *s)
 struct undo *
 edit(struct str *buf, struct edit *e)
 {
-	struct line *l, *nex;
+	int beg_bcol, end_bcol;
 	struct str _buf;
-	struct selection sel;
+	struct line_iter iter;
 	struct undo *u;
 
 	u = new_undo(ctab->w->p.fb);
 	u->e = *e;
 
-	sel.beg = &e->beg;
-	sel.end = &e->end;
-	get_sel(&sel);
-	u->e.beg = *sel.beg;
-	u->e.end = *sel.end;
+	init_line_iter(&iter, &e->beg, &e->end);
+	u->e.beg = *iter.begm;
+	u->e.end = *iter.endm;
 
 	if (!buf)
 		buf = &_buf;
 	str_empty(buf);
 
-	set_row(ctab->w, sel.beg->row);
-	l = ctab->w->p.l;
-
-	if (sel.first_len) {
-		estr_append_str(buf, &STR(l->s.s + sel.beg->col, sel.first_len));
-		estr_remove(&l->s, sel.beg->col, sel.first_len);
-		refreshl(ctab->w, l);
-	}
-
-	l = lineof(l->link.nex);
-
-	for (int i = sel.beg->row + 1; i < sel.end->row; i++) {
-		if (l->s.len <= 0) {
-			estr_append_chr(buf, '\n');
-			continue;
+	set_row(ctab->w, iter.begm->row);
+	while (iter_lines(&iter)) {
+		beg_bcol = col2bcol(iter.l, iter.beg);
+		end_bcol = col2bcol(iter.l, iter.end);
+		estr_append_str(buf, &STR(iter.l->s.s + beg_bcol, end_bcol - beg_bcol));
+		if (beg_bcol == 0 && end_bcol >= (int)iter.l->s.len) {
+			remove_line(iter.begm->fb, iter.l);
+			iter.row--;
+		} else {
+			estr_remove(&iter.l->s, beg_bcol, end_bcol - beg_bcol);
+			refreshl(ctab->w, iter.l);
 		}
-		estr_append_str(buf, &l->s);
-		nex = lineof(l->link.nex);
-		remove_line(ctab->w->p.fb, l);
-		l = nex;
 	}
-
-	if (sel.beg->row != sel.end->row) {
-		estr_append_str(buf, &STR(l->s.s, sel.last_len));
-		estr_append_cstr(&sel.beg->l->s, l->s.s + sel.last_len);
-		remove_line(ctab->w->p.fb, l);
+	if (iter.begm->row != iter.endm->row) {
+		estr_insert_str(&iter.begm->l->s, iter.begm->l->s.len,
+				&STR(iter.l->s.s, iter.l->s.len));
+		remove_line(iter.begm->fb, iter.l);
 	}
-
-	if (sel.beg->l->s.s[sel.beg->l->s.len - 1] != '\n')
-		estr_append_chr(&sel.beg->l->s, '\n');
+	set_col(ctab->w, iter.begm->col);
 
 	if (buf->s)
 		estr_from_str(&u->e.replace, buf);
-
-	set_col(ctab->w, sel.beg->col);
 
 	if (e->replace.s)
 		edit_insert(u, e);
@@ -342,7 +334,7 @@ edit_insert(struct undo *u, struct edit *e)
 	char *c;
 	struct marker *p = &ctab->w->p;
 	struct str s, orig;
-	int orig_col = p->col;
+	int bcol, orig_col = p->col;
 
 	str_empty(&orig);
 
@@ -539,9 +531,10 @@ get_reg(int k)
 int
 get_rx(struct win *w, struct line *l, int col)
 {
-	int i, rx = 0;
-	for (i = 0; i < col && i < (int)l->s.len; i++) {
-		switch (l->s.s[i]) {
+	int i, byte, rx;
+	byte = rx = 0;
+	for (i = 0; byte < col && byte < (int)l->s.len; i++) {
+		switch (l->s.s[byte]) {
 		case '\t':
 			rx += strlen(tab_render);
 			break;
@@ -549,6 +542,7 @@ get_rx(struct win *w, struct line *l, int col)
 			rx++;
 			break;
 		}
+		byte += grapheme_next_character_break_utf8(l->s.s+byte, l->s.len - byte);
 	}
 	if (i < col)
 		rx += col - i;
@@ -621,6 +615,50 @@ init(void)
 		cmd_edit(0, NULL);
 	else
 		cmd_edit(2, (const char*[]){"e", entry});
+}
+
+void
+init_line_iter(struct line_iter *iter, struct marker *begm, struct marker *endm)
+{
+	iter->begm = begm;
+	iter->endm = endm;
+	get_minmax_marker(&iter->begm, &iter->endm);
+	iter->l = iter->nex = iter->begm->l;
+	iter->row = iter->begm->row;
+}
+
+struct line_iter *
+iter_lines(struct line_iter *iter)
+{
+	if (!iter->nex)
+		return NULL;
+
+	if (iter->l != iter->nex)
+		iter->row++;
+	iter->l = iter->nex;
+	if (iter->begm->l == iter->endm->l) {
+		if (iter->begm->col == iter->endm->col)
+			return NULL;
+		iter->beg = iter->begm->col;
+		iter->end = iter->endm->col;
+		goto end;
+	} else if (iter->l == iter->begm->l) {
+		iter->beg = iter->begm->col;
+		iter->end = xstrlen(iter->begm->l->s.s);
+	} else if (iter->l == iter->endm->l) {
+		iter->beg = 0;
+		iter->end = iter->endm->col;
+		goto end;
+	} else {
+		iter->beg = 0;
+		iter->end = xstrlen(iter->l->s.s);
+	}
+
+	iter->nex = lineof(iter->l->link.nex);
+	return iter;
+end:
+	iter->nex = NULL;
+	return iter;
 }
 
 void
@@ -1024,10 +1062,11 @@ void
 set_col(struct win *w, int col)
 {
 	int max = 0;
-	if (w->p.l)
-		max = w->p.l->s.len - 1;
-	w->p.col = align(col, 0, max);
-	w->p.fb->pos.col = w->p.col;
+	struct marker *p = &w->p;
+	if (p->l && p->l->s.s)
+		max = xstrlen(p->l->s.s) - 1;
+	p->col = align(col, 0, max);
+	p->fb->pos.col = p->col;
 	refreshw(w);
 }
 
@@ -1185,6 +1224,15 @@ xgoto_mark(struct win *w, struct marker *m)
 	w->p.rowoff = m->rowoff;
 	set_row(w, m->row);
 	set_col(w, m->col);
+}
+
+int
+xstrlen(const char *s)
+{
+	int ulen = 0;
+	for (int i = 0; s[i]; ulen++)
+		i += grapheme_next_character_break_utf8(s+i, SIZE_MAX);
+	return ulen;
 }
 
 /* key functions */
@@ -1790,6 +1838,11 @@ cmd_edit(int argc, const char *argv[])
 		l = ecalloc(1, sizeof(*l));
 		estr_from_cstr(&l->s, sbuf);
 		list_insert(&fb->lines, fb->lines.end, &l->link);
+	}
+	if (!nline) {
+		l = empty_line();
+		list_insert(&fb->lines, fb->lines.end, &l->link);
+		nline = 1;
 	}
 	fb->nline = nline;
 

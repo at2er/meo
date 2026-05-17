@@ -1,6 +1,7 @@
 CC = gcc
 CFLAGS = -D_DEFAULT_SOURCE -std=c99 -pedantic \
 	 -Wall -Wextra -Wno-unused-parameter -Iinclude -g3 -ggdb
+LDFLAGS = -L/usr/local/lib -lgrapheme
 AR = ar
 PREFIX = /usr/local
 
@@ -18,7 +19,7 @@ all: $(TARGET)
 	$(CC) -c $(CFLAGS) $< -o $@
 
 $(TARGET): meo.h $(OBJ) $(wildcard include/*.h)
-	$(CC) -o $@ $(OBJ)
+	$(CC) -o $@ $(OBJ) $(LDFLAGS)
 
 clean:
 	rm -f $(OBJ) $(TARGET)
