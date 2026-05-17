@@ -1169,7 +1169,7 @@ backspace(const union arg *arg)
 {
 	struct edit e;
 	int pos = ctab->w->p.col - arg->i;
-	e.at = e.beg = e.end = ctab->w->p;
+	e.beg = e.end = ctab->w->p;
 	if (pos < 0) {
 		if (!e.beg.l->link.prv)
 			return;
@@ -1179,6 +1179,7 @@ backspace(const union arg *arg)
 	} else {
 		e.beg.col--;
 	}
+	e.at = e.beg;
 	str_empty(&e.replace);
 	edit(NULL, &e);
 }
