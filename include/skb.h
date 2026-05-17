@@ -94,7 +94,7 @@ struct key {
 	SKB_REDEFINE_KEY
 };
 
-extern bool skb_handle_key(int key);
+extern bool skb_handle_key(int key, const struct key *keys);
 
 extern int skb_combo[SKB_MAX_KEYCOMBO];
 extern int skb_ncombo;
@@ -156,13 +156,11 @@ _skb_apply_key(const struct key *key)
 }
 
 bool
-skb_handle_key(int key)
+skb_handle_key(int key, const struct key *keys)
 {
-	const struct key *keys;
 	enum _SKB_APPLY_KEY_RESULT ret;
 	bool usable = false;
 	skb_combo[skb_ncombo++] = key;
-	keys = get_keys_table();
 	for (int i = 0; keys[i].keys != NULL; i++) {
 		ret = _skb_apply_key(&keys[i]);
 		if (ret == _SKB_APPLY_KEY_SUCCESS)

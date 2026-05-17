@@ -152,11 +152,11 @@ void
 comp_pattern(const char *p, int len)
 {
 	char *dup = (char*)p;
-	if (len != 0)
+	if (len)
 		dup = strndup(p, len);
 	if (pattern)
 		regfree(pattern);
-	if (!pattern)
+	else
 		pattern = ecalloc(1, sizeof(*pattern));
 	if (regcomp(pattern, dup, REG_NEWLINE)) {
 		free(pattern);
@@ -630,7 +630,7 @@ keypress(int k)
 	if (k == 0)
 		return;
 
-	h = skb_handle_key(k);
+	h = skb_handle_key(k, get_keys_table());
 	if (!h && !mode_can_insert()) {
 		skb_ncombo = 0;
 		return;
@@ -1550,20 +1550,6 @@ void
 sel(const union arg *arg)
 {
 	has_sel = SEL_MARKER.l;
-}
-
-void
-sel_line(const union arg *arg)
-{
-	if (arg->i > 0) {
-		set_col(ctab->w, 0);
-		jumping();
-		set_col(ctab->w, ctab->w->p.l->s.len - 1);
-	} else {
-		set_col(ctab->w, ctab->w->p.l->s.len - 1);
-		jumping();
-		set_col(ctab->w, 0);
-	}
 }
 
 void

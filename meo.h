@@ -102,7 +102,6 @@ static void redo(const union arg *arg);
 static void redraw(const union arg *arg);
 static void search(const union arg *arg);
 static void sel(const union arg *arg);
-static void sel_line(const union arg *arg);
 static void sel_word(const union arg *arg);
 static void suspend(const union arg *arg);
 static void swap_sel(const union arg *arg);
