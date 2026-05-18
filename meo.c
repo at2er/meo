@@ -44,7 +44,7 @@ struct selection {
 };
 
 struct line_iter {
-	struct marker *begm, *endm;
+	struct marker begm, endm;
 	struct line *l, *nex;
 	int beg, end, /* start and end col of line */
 	    row;
@@ -66,8 +66,7 @@ static struct line *empty_line(void);
 static void fini(void);
 static void get_draw_line(struct win *w);
 static const struct key *get_keys_table(void);
-static struct line *get_line_nex(struct line *beg, int step);
-static struct line *get_line_prv(struct line *beg, int step);
+static struct line *get_line(struct line *curl, int orig, int cur);
 static struct marker *get_marker(int k);
 static char get_marker_chr(int idx);
 static void get_minmax_marker(struct marker **beg, struct marker **end);
@@ -286,32 +285,34 @@ edit(struct str *buf, struct edit *e)
 	u->e = *e;
 
 	init_line_iter(&iter, &e->beg, &e->end);
-	u->e.beg = *iter.begm;
-	u->e.end = *iter.endm;
+	u->e.beg = iter.begm;
+	u->e.end = iter.endm;
 
 	if (!buf)
 		buf = &_buf;
 	str_empty(buf);
 
-	set_row(ctab->w, iter.begm->row);
+	set_row(ctab->w, iter.begm.row);
 	while (iter_lines(&iter)) {
 		beg_bcol = col2bcol(iter.l, iter.beg);
 		end_bcol = col2bcol(iter.l, iter.end);
 		estr_append_str(buf, &STR(iter.l->s.s + beg_bcol, end_bcol - beg_bcol));
 		if (beg_bcol == 0 && end_bcol >= (int)iter.l->s.len) {
-			remove_line(iter.begm->fb, iter.l);
+			remove_line(iter.begm.fb, iter.l);
 			iter.row--;
 		} else {
 			estr_remove(&iter.l->s, beg_bcol, end_bcol - beg_bcol);
 			refreshl(ctab->w, iter.l);
+			if (iter.l == iter.endm.l && iter.begm.row != iter.endm.row) {
+				estr_insert_str(&iter.begm.l->s, iter.begm.l->s.len,
+						&STR(iter.l->s.s, iter.l->s.len));
+				remove_line(iter.begm.fb, iter.l);
+			}
 		}
 	}
-	if (iter.begm->row != iter.endm->row) {
-		estr_insert_str(&iter.begm->l->s, iter.begm->l->s.len,
-				&STR(iter.l->s.s, iter.l->s.len));
-		remove_line(iter.begm->fb, iter.l);
-	}
-	set_col(ctab->w, iter.begm->col);
+
+	/* make sure the cursor is in correct position now */
+	xgoto_mark(ctab->w, &iter.begm);
 
 	if (buf->s)
 		estr_from_str(&u->e.replace, buf);
@@ -458,23 +459,23 @@ get_keys_table(void)
 }
 
 struct line *
-get_line_nex(struct line *beg, int step)
+get_line(struct line *curl, int orig, int cur)
 {
-	list_for_each(struct line, l, &beg->link, tmp, link) {
-		if (step <= 0)
-			return l;
-		step--;
-	}
-	return NULL;
-}
-
-struct line *
-get_line_prv(struct line *beg, int step)
-{
-	list_for_each_prv(struct line, l, &beg->link, tmp, link) {
-		if (step <= 0)
-			return l;
-		step--;
+	int i = cur - orig;
+	if (i < 0) {
+		list_for_each_prv(struct line, l, &curl->link, tmp, link) {
+			if (i >= 0)
+				return l;
+			i++;
+		}
+	} else if (i > 0) {
+		list_for_each(struct line, l, &curl->link, tmp, link) {
+			if (i <= 0)
+				return l;
+			i--;
+		}
+	} else {
+		return curl;
 	}
 	return NULL;
 }
@@ -620,11 +621,16 @@ init(void)
 void
 init_line_iter(struct line_iter *iter, struct marker *begm, struct marker *endm)
 {
-	iter->begm = begm;
-	iter->endm = endm;
-	get_minmax_marker(&iter->begm, &iter->endm);
-	iter->l = iter->nex = iter->begm->l;
-	iter->row = iter->begm->row;
+	get_minmax_marker(&begm, &endm);
+	iter->begm = *begm;
+	iter->endm = *endm;
+	if (iter->endm.col == 0 && iter->begm.l != iter->endm.l) {
+		iter->endm.l = lineof(iter->endm.l->link.prv);
+		iter->endm.col = xstrlen(iter->endm.l->s.s);
+		iter->endm.row--;
+	}
+	iter->l = iter->nex = iter->begm.l;
+	iter->row = iter->begm.row;
 }
 
 struct line_iter *
@@ -636,18 +642,20 @@ iter_lines(struct line_iter *iter)
 	if (iter->l != iter->nex)
 		iter->row++;
 	iter->l = iter->nex;
-	if (iter->begm->l == iter->endm->l) {
-		if (iter->begm->col == iter->endm->col)
+	if (iter->begm.l == iter->endm.l) {
+		if (iter->begm.col == iter->endm.col)
 			return NULL;
-		iter->beg = iter->begm->col;
-		iter->end = iter->endm->col;
+		iter->beg = iter->begm.col;
+		iter->end = iter->endm.col;
 		goto end;
-	} else if (iter->l == iter->begm->l) {
-		iter->beg = iter->begm->col;
-		iter->end = xstrlen(iter->begm->l->s.s);
-	} else if (iter->l == iter->endm->l) {
+	} else if (iter->l == iter->begm.l) {
+		iter->beg = iter->begm.col;
+		iter->end = xstrlen(iter->begm.l->s.s);
+	} else if (iter->l == iter->endm.l) {
 		iter->beg = 0;
-		iter->end = iter->endm->col;
+		iter->end = iter->endm.col;
+		if (iter->beg == iter->end)
+			return NULL;
 		goto end;
 	} else {
 		iter->beg = 0;
@@ -1089,10 +1097,12 @@ set_row(struct win *w, int row)
 		w->p.l = lineof(w->p.fb->lines.beg);
 	} else if (w->p.row == w->p.fb->nline - 1) {
 		w->p.l = lineof(w->p.fb->lines.end);
-	} else if (w->p.row > orig) {
-		w->p.l = get_line_nex(w->p.l, w->p.row - orig);
-	} else if (w->p.row < orig) {
-		w->p.l = get_line_prv(w->p.l, orig - w->p.row);
+	} else {
+		if (w->p.fb->ldirty) {
+			w->p.l = lineof(w->p.fb->lines.beg);
+			orig = 0;
+		}
+		w->p.l = get_line(w->p.l, orig, w->p.row);
 	}
 	get_draw_line(w);
 
@@ -1218,7 +1228,7 @@ xgoto_mark(struct win *w, struct marker *m)
 {
 	w->p.fb = m->fb;
 	if (w->p.fb->ldirty || !m->l)
-		m->l = get_line_nex(lineof(m->fb->lines.beg), m->row);
+		m->l = get_line(lineof(m->fb->lines.beg), 0, m->row);
 	w->p.l = m->l;
 	w->p.row = m->row;
 	w->p.rowoff = m->rowoff;
