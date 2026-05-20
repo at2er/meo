@@ -38,11 +38,6 @@
 #define undoof(LINK) list_container_of(LINK, struct undo, link)
 #define refreshw(WREF) ((WREF)->refresh = 1)
 
-struct selection {
-	struct marker *beg, *end;
-	int first_len, last_len;
-};
-
 struct line_iter {
 	struct marker begm, endm;
 	struct line *l, *nex;
@@ -73,7 +68,6 @@ static void get_minmax_marker(struct marker **beg, struct marker **end);
 static char **get_reg(int k);
 static int get_rx(struct win *w, struct line *l, int col);
 static int get_ry(struct win *w, int row);
-static void get_sel(struct selection *sel);
 static void init(void);
 static void init_line_iter(struct line_iter *iter, struct marker *begm, struct marker *endm);
 static struct line_iter *iter_lines(struct line_iter *iter);
@@ -276,7 +270,7 @@ dup_to_reg(int r, char *s)
 struct undo *
 edit(struct str *buf, struct edit *e)
 {
-	int beg_bcol, end_bcol;
+	int beg_bcol, end_bcol, concat = 0;
 	struct str _buf;
 	struct line_iter iter;
 	struct undo *u;
@@ -297,18 +291,21 @@ edit(struct str *buf, struct edit *e)
 		beg_bcol = col2bcol(iter.l, iter.beg);
 		end_bcol = col2bcol(iter.l, iter.end);
 		estr_append_str(buf, &STR(iter.l->s.s + beg_bcol, end_bcol - beg_bcol));
-		if (beg_bcol == 0 && end_bcol >= (int)iter.l->s.len) {
-			remove_line(iter.begm.fb, iter.l);
-			iter.row--;
-		} else {
-			estr_remove(&iter.l->s, beg_bcol, end_bcol - beg_bcol);
-			refreshl(ctab->w, iter.l);
-			if (iter.l == iter.endm.l && iter.begm.row != iter.endm.row) {
-				estr_insert_str(&iter.begm.l->s, iter.begm.l->s.len,
-						&STR(iter.l->s.s, iter.l->s.len));
+		estr_remove(&iter.l->s, beg_bcol, end_bcol - beg_bcol);
+		refreshl(ctab->w, iter.l);
+		if (end_bcol >= (int)iter.l->s.len) {
+			if (beg_bcol == 0) {
 				remove_line(iter.begm.fb, iter.l);
+				iter.row--;
+			} else if (iter.l == iter.begm.l) {
+				concat = 1;
 			}
 		}
+	}
+	if (concat) {
+		iter.l = lineof(iter.begm.l->link.nex);
+		estr_append_str(&iter.begm.l->s, &iter.l->s);
+		remove_line(iter.begm.fb, iter.l);
 	}
 
 	/* make sure the cursor is in correct position now */
@@ -335,7 +332,7 @@ edit_insert(struct undo *u, struct edit *e)
 	char *c;
 	struct marker *p = &ctab->w->p;
 	struct str s, orig;
-	int bcol, orig_col = p->col;
+	int orig_col = p->col;
 
 	str_empty(&orig);
 
@@ -554,19 +551,6 @@ int
 get_ry(struct win *w, int row)
 {
 	return w->y + row - w->p.rowoff;
-}
-
-void
-get_sel(struct selection *sel)
-{
-	get_minmax_marker(&sel->beg, &sel->end);
-	if (sel->beg->row != sel->end->row) {
-		sel->first_len = sel->beg->l->s.len - sel->beg->col;
-		sel->last_len = sel->end->col;
-	} else {
-		sel->first_len = sel->end->col - sel->beg->col;
-		sel->last_len = 0;
-	}
 }
 
 void
@@ -1744,28 +1728,18 @@ undo(const union arg *arg)
 void
 yank(const union arg *arg)
 {
+	int beg_bcol, end_bcol;
 	struct str buf;
-	struct line *l;
-	struct selection sel;
+	struct line_iter iter;
+
 	str_empty(&buf);
+	init_line_iter(&iter, &SEL_MARKER, &ctab->w->p);
 
-	sel.beg = &SEL_MARKER;
-	sel.end = &ctab->w->p;
-	get_sel(&sel);
-	l = sel.beg->l;
-	if (sel.first_len)
-		estr_append_str(&buf, &STR(l->s.s + sel.beg->col, sel.first_len));
-
-	l = lineof(l->link.nex);
-	for (int i = sel.beg->row + 1; i < sel.end->row; i++) {
-		if (l->s.len <= 0)
-			continue;
-		estr_append_str(&buf, &l->s);
-		l = lineof(l->link.nex);
+	while (iter_lines(&iter)) {
+		beg_bcol = col2bcol(iter.l, iter.beg);
+		end_bcol = col2bcol(iter.l, iter.end);
+		estr_append_str(&buf, &STR(iter.l->s.s + beg_bcol, end_bcol - beg_bcol));
 	}
-
-	if (sel.last_len)
-		estr_append_str(&buf, &STR(l->s.s, sel.last_len));
 
 	dup_to_reg('+', buf.s);
 }
