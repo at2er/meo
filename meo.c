@@ -270,7 +270,7 @@ dup_to_reg(int r, char *s)
 struct undo *
 edit(struct str *buf, struct edit *e)
 {
-	int beg_bcol, end_bcol, concat = 0;
+	int beg_bcol, end_bcol, concat = 0, olen;
 	struct str _buf;
 	struct line_iter iter;
 	struct undo *u;
@@ -288,12 +288,13 @@ edit(struct str *buf, struct edit *e)
 
 	set_row(ctab->w, iter.begm.row);
 	while (iter_lines(&iter)) {
+		olen = iter.l->s.len;
 		beg_bcol = col2bcol(iter.l, iter.beg);
 		end_bcol = col2bcol(iter.l, iter.end);
 		estr_append_str(buf, &STR(iter.l->s.s + beg_bcol, end_bcol - beg_bcol));
 		estr_remove(&iter.l->s, beg_bcol, end_bcol - beg_bcol);
 		refreshl(ctab->w, iter.l);
-		if (end_bcol >= (int)iter.l->s.len) {
+		if (end_bcol >= olen) {
 			if (beg_bcol == 0) {
 				remove_line(iter.begm.fb, iter.l);
 				iter.row--;
