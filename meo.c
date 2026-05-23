@@ -631,6 +631,8 @@ init_line_iter(struct line_iter *iter, struct marker *begm, struct marker *endm)
 		iter->endm.col = xstrlen(iter->endm.l->s.s);
 		iter->endm.row--;
 	}
+	if (!iter->endm.l->link.nex && iter->endm.col >= (int)iter->endm.l->s.len)
+		iter->endm.col = xstrlen(iter->endm.l->s.s) - 1;
 	iter->l = iter->nex = iter->begm.l;
 	iter->row = iter->begm.row;
 }
@@ -1249,18 +1251,6 @@ xstrlen(const char *s)
 
 /* key functions */
 void
-concat_line(const union arg *arg)
-{
-	struct edit e;
-	e.at = e.beg = e.end = ctab->w->p;
-	e.end.l = lineof(e.end.l->link.nex);
-	e.end.row++;
-	e.end.col = 0;
-	str_empty(&e.replace);
-	edit(NULL, &e);
-}
-
-void
 backspace(const union arg *arg)
 {
 	struct edit e;
@@ -1346,11 +1336,6 @@ delete(const union arg *arg)
 {
 	struct str _buf, *buf = NULL;
 	struct edit e;
-
-	if (!has_sel && ctab->w->p.col >= (int)ctab->w->p.l->s.len - 1) {
-		concat_line(0);
-		return;
-	}
 
 	e.at.fb = NULL;
 	e.beg = ctab->w->p;

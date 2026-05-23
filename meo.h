@@ -83,7 +83,6 @@ struct undo {
 static void backspace(const union arg *arg);
 static void change(const union arg *arg);
 static void cmd(const union arg *arg);
-static void concat_line(const union arg *arg);
 static void delete(const union arg *arg);
 static void find_nex(const union arg *arg);
 static void find_prv(const union arg *arg);
