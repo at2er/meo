@@ -333,32 +333,38 @@ edit_insert(struct undo *u, struct edit *e)
 	char *c;
 	struct marker *p = &ctab->w->p;
 	struct str s, orig;
-	int orig_col = p->col;
+	int bcol, len = 0, orig_col = p->col, ret;
 
 	str_empty(&orig);
 
 	s.s = e->replace.s;
 	s.len = 0;
-	for (c = e->replace.s; *c; c++) {
+	for (c = e->replace.s; *c;) {
 		if (*c == '\n') {
 			if (!orig.s) {
-				estr_from_cstr(&orig, p->l->s.s + orig_col);
-				estr_remove(&p->l->s, orig_col, p->l->s.len - orig_col);
+				bcol = col2bcol(p->l, orig_col);
+				estr_from_cstr(&orig, p->l->s.s + bcol);
+				estr_remove(&p->l->s, bcol, p->l->s.len - bcol);
 			}
 			estr_append_str(&p->l->s, &s);
 			estr_append_chr(&p->l->s, '\n');
 			s.s = c + 1;
-			s.siz = s.len = 0;
+			s.siz = s.len = len = 0;
 			edit_new_line(1);
 			continue;
 		}
-		s.len++;
+		ret = grapheme_next_character_break_utf8(c, SIZE_MAX);
+		c += ret;
+		s.len += ret;
+		len++;
 		p->col++;
 	}
 	refreshl(ctab->w, p->l);
 
-	estr_insert_str(&p->l->s, p->col - s.len, &s);
-	estr_insert_str(&p->l->s, p->col - s.len + s.len, &orig);
+	bcol = col2bcol(p->l, p->col - len);
+	estr_insert_str(&p->l->s, bcol, &s);
+	bcol = col2bcol(p->l, p->col + len);
+	estr_insert_str(&p->l->s, bcol, &orig);
 	str_free(&orig);
 
 	set_col(ctab->w, p->col);
@@ -530,15 +536,26 @@ get_reg(int k)
 int
 get_rx(struct win *w, struct line *l, int col)
 {
-	int i, byte, rx;
+	int byte, i, ret, rx;
+	uint_least32_t cp;
 	byte = rx = 0;
-	for (i = 0; byte < col && byte < (int)l->s.len; i++) {
+	for (i = 0; i < col && byte < (int)l->s.len; i++) {
 		switch (l->s.s[byte]) {
 		case '\t':
 			rx += strlen(tab_render);
 			break;
 		default:
 			rx++;
+			if (!((ret = grapheme_decode_utf8(l->s.s+byte,
+			       l->s.len - byte, &cp)) > (int)(l->s.len - byte) ||
+			      cp == GRAPHEME_INVALID_CODEPOINT)) {
+				if ((cp >= 0xac00 && cp <= 0xd7af) ||
+				    (cp >= 0x2e80 && cp <= 0x9fff) ||
+				    (cp >= 0x9f00 && cp <= 0xfaff) ||
+				    (cp >= 0xff00 && cp <= 0xffef) ||
+				    (cp >= 0x1f0000 && cp <= 0x1f9ff))
+				rx++;
+			}
 			break;
 		}
 		byte += grapheme_next_character_break_utf8(l->s.s+byte, l->s.len - byte);
