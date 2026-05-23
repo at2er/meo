@@ -348,7 +348,7 @@ edit_insert(struct undo *u, struct edit *e)
 			}
 			estr_append_str(&p->l->s, &s);
 			estr_append_chr(&p->l->s, '\n');
-			s.s = c + 1;
+			s.s = c++;
 			s.siz = s.len = len = 0;
 			edit_new_line(1);
 			continue;
