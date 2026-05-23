@@ -1349,7 +1349,7 @@ delete(const union arg *arg)
 	str_empty(&e.replace);
 	edit(buf, &e);
 
-	if (buf)
+	if (buf && buf->s)
 		dup_to_reg('+', buf->s);
 
 	has_sel = NULL;
