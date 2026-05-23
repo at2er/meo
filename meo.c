@@ -755,7 +755,7 @@ poll_fbuf(int fd, const char *name)
 	darr_last(&pfds).events = POLLIN;
 
 	strcpy(fb->path, name ? name : "<poll>");
-	fb->poll = 1;
+	fb->tmp = fb->poll = 1;
 	fb->pos.fb = fb;
 
 	return fb;
@@ -936,7 +936,7 @@ ruler(void)
 
 	buf++;
 	buf += snprintf(buf, BUFSIZ - (buf - sbuf), "%d,%d",
-			p->row, p->col);
+			p->row + 1, p->col + 1);
 	len = buf - sbuf;
 
 	fname = p->fb->name;
@@ -1334,6 +1334,8 @@ cmd(const union arg *arg)
 			break;
 		}
 	}
+
+	cmd_goto_line(args.n, (const char **)args.e);
 
 end:
 	free(dup);
@@ -1787,7 +1789,6 @@ cmd_buffer(int argc, const char *argv[])
 
 	width = snprintf(sbuf, sizeof(sbuf), "%d", fbs.n - 1);
 
-	/* tmp_fbuf will append the [fb] to [fbs], so don't handle it */
 	for (int i = 0; i < fbs.n - 1; i++, fb->nline++) {
 		l = ecalloc(1, sizeof(*l));
 		str_empty(&l->s);
@@ -1855,6 +1856,21 @@ setwin:
 }
 
 void
+cmd_goto_line(int argc, const char *argv[])
+{
+	const char *c = argv[0];
+	int row = 0;
+	for (; *c; c++) {
+		if (*c < '0' || *c > '9')
+			return;
+		row *= 10;
+		row += *c - '0';
+	}
+	if (c != argv[0])
+		set_row(ctab->w, row == 0 ? row : row - 1);
+}
+
+void
 cmd_marks(int argc, const char *argv[])
 {
 	struct fbuf *fb;
@@ -1864,7 +1880,6 @@ cmd_marks(int argc, const char *argv[])
 
 	fb = tmp_fbuf();
 
-	/* tmp_fbuf will append the [fb] to [fbs], so don't handle it */
 	for (int i = 0; i < (int)LENGTH(markers); i++, fb->nline++) {
 		if (!markers[i].fb) {
 			fb->nline--;

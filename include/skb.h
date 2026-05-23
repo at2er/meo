@@ -4,8 +4,6 @@
  *
  * Put 'SKB_IMPL' to one source file to compile it and use it.
  *
- * @important: `get_keys_table` must be declared before include this file.
- * `const struct key *get_keys_table(void)`
  *
  * Keys:
  *   - Control (ctrl):
