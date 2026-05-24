@@ -1230,6 +1230,8 @@ xfocus_win(struct win *w)
 void
 xgoto_mark(struct win *w, struct marker *m)
 {
+	if (w->p.fb != m->fb)
+		w->prv_fb = w->p.fb;
 	w->p.fb = m->fb;
 	if (w->p.fb->ldirty || !m->l)
 		m->l = get_line(lineof(m->fb->lines.beg), 0, m->row);
@@ -1758,12 +1760,17 @@ cmd_buffer(int argc, const char *argv[])
 	struct line *l;
 
 	if (argc > 1 && argv[1]) {
+		if (*argv[1] == '#' && ctab->w->prv_fb) {
+			fb = ctab->w->prv_fb;
+			goto goto_fb;
+		}
 		if ((idx = atoi(argv[1])) > fbs.n - 1)
 			return;
 		if (idx < 0)
 			return;
 		fb = fbs.e[idx];
 		fb->pos.fb = fb;
+goto_fb:
 		xgoto_mark(ctab->w, &fb->pos);
 		return;
 	}

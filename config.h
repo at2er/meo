@@ -66,6 +66,7 @@ static const struct key normal_keys[] = {
 	{"^l",   redraw,      {0}                },
 	{"^u",   move_row,    {.i = -10}         },
 	{"^z",   suspend,     {0}                },
+	{"/sb",  cmd,         {.s = "b #"}       },
 	{"/sww", focus_win,   {.i = FOCUS_PRV}   },
 	{"/swm", focus_win,   {.i = FOCUS_MAIN}  },
 	{"/swt", focus_win,   {.i = FOCUS_TMP}   },

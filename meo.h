@@ -60,6 +60,7 @@ struct win {
 	struct line *draw;
 	struct marker p;
 	struct win *prv;
+	struct fbuf *prv_fb;
 	unsigned int refresh:1;
 	int x, y, w, h;
 };
