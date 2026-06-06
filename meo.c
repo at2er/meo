@@ -97,6 +97,7 @@ static char *sys_paste(void);
 static struct fbuf *tmp_fbuf(void);
 static void update_poll_fbuf(int idx);
 static void update_tab_wins(struct tab *tab);
+static int utf8_blen(uint8_t first_byte);
 static void write_to_cmd(const char **cmd, const char *s);
 static void xfocus_win(struct win *w);
 static void xgoto_mark(struct win *w, struct marker *m);
@@ -703,6 +704,10 @@ keypress(int k)
 		*buf = skb_combo[i];
 		buf++;
 	}
+	for (int l = utf8_blen(*(buf - 1)) - 1; l > 0; l--, buf++) {
+		k = sctui_grab_key();
+		*buf = k;
+	}
 	*buf = '\0';
 	skb_ncombo = 0;
 
@@ -1192,6 +1197,20 @@ update_tab_wins(struct tab *tab)
 		xgoto_mark(&tab->tmpw, &tab->tmpw.p);
 	}
 	xgoto_mark(&tab->mw, &tab->mw.p);
+}
+
+int
+utf8_blen(uint8_t first_byte)
+{
+	if (first_byte <= 0x7F)
+		return 1;
+	else if (RANGE(first_byte, 0xC0, 0xDF))
+		return 2;
+	else if (RANGE(first_byte, 0xE0, 0xEF))
+		return 3;
+	else if (RANGE(first_byte, 0xF0, 0xF7))
+		return 4;
+	return -1;
 }
 
 void
