@@ -1383,18 +1383,19 @@ find_nex(const union arg *arg)
 	struct marker *p = &ctab->w->p;
 	const char *c = p->l->s.s + p->col;
 	int k = request_key();
+	struct marker orig = *p;
 
 	jumping();
 	while (*c) {
 		if (*c == k)
 			break;
 		if (*c == '\n') {
-			if (arg->i) {
+			if (arg->i && &p->l->link != p->fb->lines.end) {
 				move_row(&ARG(.i = 1));
 				c = p->l->s.s;
 				continue;
 			} else {
-				return;
+				goto back;
 			}
 		}
 		c++;
@@ -1403,6 +1404,9 @@ find_nex(const union arg *arg)
 	c++; /* let the selection include expected character */
 	has_sel = p->l;
 	set_col(ctab->w, c - p->l->s.s);
+	return;
+back:
+	xgoto_mark(ctab->w, &orig);
 }
 
 void
@@ -1411,18 +1415,19 @@ find_prv(const union arg *arg)
 	struct marker *p = &ctab->w->p;
 	const char *c = p->l->s.s + p->col;
 	int k = request_key();
+	struct marker orig = *p;
 
 	jumping();
 	while (*c) {
 		if (*c == k)
 			break;
 		if (c == p->l->s.s) {
-			if (arg->i) {
+			if (arg->i && &p->l->link != p->fb->lines.beg) {
 				move_row(&ARG(.i = - 1));
 				c = p->l->s.s + p->l->s.len - 1;
 				continue;
 			} else {
-				return;
+				goto back;
 			}
 		}
 		c--;
@@ -1430,6 +1435,9 @@ find_prv(const union arg *arg)
 
 	has_sel = p->l;
 	set_col(ctab->w, c - p->l->s.s);
+	return;
+back:
+	xgoto_mark(ctab->w, &orig);
 }
 
 void
