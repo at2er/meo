@@ -4,22 +4,6 @@
  *
  * Put 'SKB_IMPL' to one source file to compile it and use it.
  *
- *
- * Keys:
- *   - Control (ctrl):
- *     Starting with '^' means 'ctrl + X', such as "^c" means 'ctrl + c'.
- *     ( see **Special Characters** )
- *
- *   - Shift:
- *     * Visible ascii characters: shift changes their certain key.
- *     ( see **Special Characters** )
- *
- *   - Special Characters:
- *     * Backspace:    "/b"
- *     * Enter/Return: "/r"
- *     * '^': "^^"
- *     * '/': "//"
- *
  * Option macros: #bool(defined: true, undefined: false)
  *   SKB_MAX_KEYCOMBO -> int
  *
@@ -56,7 +40,6 @@
  */
 #ifndef SKB_H
 #define SKB_H
-#include <stdbool.h>
 #include "sctui.h"
 
 #ifndef SKB_MAX_KEYCOMBO
@@ -71,12 +54,6 @@
 #define SKB_REDEFINE_KEY
 #endif
 
-enum _SKB_APPLY_KEY_RESULT {
-	_SKB_APPLY_KEY_NOT_FOUND,
-	_SKB_APPLY_KEY_SUCCESS,
-	_SKB_APPLY_KEY_USABLE_KEY
-};
-
 union arg {
 	int i;
 	const char *s;
@@ -86,13 +63,21 @@ union arg {
 };
 
 struct key {
-	const char *keys;
+	int keys[SKB_MAX_KEYCOMBO];
 	void (*func)(const union arg *arg);
 	const union arg arg;
 	SKB_REDEFINE_KEY
 };
 
-extern bool skb_handle_key(int key, const struct key *keys);
+extern int skb_dropcombo(void);
+
+/* Get the number of matched keys */
+extern const struct key *skb_match(const struct key *keys);
+
+/* @return: -1: key combo not found (won't reset skb_ncombo)
+             0: key combo found but full matched
+             1: key combo found and applied */
+extern int skb_keypress(int key, const struct key *keys);
 
 extern int skb_combo[SKB_MAX_KEYCOMBO];
 extern int skb_ncombo;
@@ -106,66 +91,42 @@ extern int skb_ncombo;
 int skb_combo[SKB_MAX_KEYCOMBO];
 int skb_ncombo;
 
-static int
-_skb_compare_key(const char *key, int pressed)
+int
+skb_dropcombo(void)
 {
-#define SPECIAL(K, P, C) \
-	if (pressed == (K)) { \
-		if (key[0] == (P) && key[1] == (C)) \
-			return 2; \
-		return 0; \
-	}
-	SPECIAL(127, '/', 'b') else
-	SPECIAL(10,  '/', 'r') else
-	SPECIAL(27,  '/', 'e') else
-	SPECIAL(' ', '/', 's') else
-	SPECIAL('/', '/', '/') else
-	SPECIAL('^', '^', '^') else
-	if (iscntrl(pressed)) {
-		if (key[0] != '^')
-			return 0;
-		if (TK_CTRL(key[1]) == TK_CTRL(pressed))
-			return 2;
-	}
-#undef SPECIAL
-	if (pressed != key[0])
-		return 0;
-	return 1;
+	int n = skb_ncombo;
+	skb_ncombo = 0;
+	return n;
 }
 
-static enum _SKB_APPLY_KEY_RESULT
-_skb_apply_key(const struct key *key)
+const struct key *
+skb_match(const struct key *keys)
 {
-	int r;
-	for (int i = 0, ki = 0; i < skb_ncombo; i++) {
-		r = _skb_compare_key(&key->keys[ki], skb_combo[i]);
-		if (r < 1)
-			break;
-		ki += r;
-		if (i != skb_ncombo - 1)
-			continue;
-		if (key->keys[ki] != '\0')
-			return _SKB_APPLY_KEY_USABLE_KEY;
-		key->func(&key->arg);
+	const struct key *k;
+	for (k = keys; k->keys[0]; k++) {
+		for (int i = 0; i < skb_ncombo; i++) {
+			if (k->keys[i] != skb_combo[i])
+				break;
+			if (i == skb_ncombo - 1)
+				return k;
+		}
+	}
+	return NULL;
+}
+
+int
+skb_keypress(int key, const struct key *keys)
+{
+	const struct key *k;
+	skb_combo[skb_ncombo] = key;
+	skb_ncombo++;
+	if (!(k = skb_match(keys)))
+		return -1;
+	if (skb_ncombo == SKB_MAX_KEYCOMBO || k->keys[skb_ncombo] == 0) {
+		k->func(&k->arg);
 		skb_ncombo = 0;
-		return _SKB_APPLY_KEY_SUCCESS;
+		return 1;
 	}
-	return _SKB_APPLY_KEY_NOT_FOUND;
-}
-
-bool
-skb_handle_key(int key, const struct key *keys)
-{
-	enum _SKB_APPLY_KEY_RESULT ret;
-	bool usable = false;
-	skb_combo[skb_ncombo++] = key;
-	for (int i = 0; keys[i].keys != NULL; i++) {
-		ret = _skb_apply_key(&keys[i]);
-		if (ret == _SKB_APPLY_KEY_SUCCESS)
-			return true;
-		if (ret == _SKB_APPLY_KEY_USABLE_KEY)
-			usable = true;
-	}
-	return usable;
+	return 0;
 }
 #endif /* SKB_IMPL */

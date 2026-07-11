@@ -38,7 +38,6 @@
 #include <stdint.h>
 #include <termios.h>
 
-#define TK_CTRL(K) ((K) & 0x1f)
 #define SCTUI_OUT_BUF_SIZ 8192
 
 /* see 'man 4 console_codes'
@@ -66,6 +65,8 @@
 #define SCTUI_HALF_BRIGHT 0x40000000
 #define SCTUI_BOLD        0x80000000
 
+#define SCTUI_BUF_REM (sizeof(global_sctui.buf) - global_sctui.bufp)
+
 enum {
 	SCTUI_BLACK,
 	SCTUI_RED,
@@ -78,7 +79,7 @@ enum {
 };
 
 struct sctui {
-	int init;
+	int init, last_attr;
 
 	struct termios cur, orig;
 	int cx, cy, w, h;
@@ -88,6 +89,10 @@ struct sctui {
 
 	char cbuf[128];
 };
+
+/* Use the last attr.
+ * @important: It use the 'global_sctui.cbuf', so it unsupports recursive use. */
+extern const char *sctui_attr_last(void);
 
 /* It use the 'global_sctui.cbuf', so it unsupports recursive use */
 extern const char *sctui_attr_off(void);
@@ -103,6 +108,7 @@ extern int  sctui_grab_key(void);
 extern void sctui_init(void);
 extern void sctui_move(int x, int y);
 extern void sctui_out(const char *str, int len);
+extern void sctui_outc(char c);
 extern void sctui_text(int x, int y, const char *str, int len);
 extern void sctui_update(void);
 
@@ -144,13 +150,20 @@ _sctui_die(const char *msg, ...)
 {
 	va_list ap;
 
+	if (global_sctui.init)
+		sctui_fini();
+
 	va_start(ap, msg);
 	vfprintf(stderr, msg, ap);
 	va_end(ap);
 
-	if (global_sctui.init)
-		sctui_fini();
 	exit(1);
+}
+
+const char *
+sctui_attr_last(void)
+{
+	return sctui_attr_on(global_sctui.last_attr);
 }
 
 const char *
@@ -159,6 +172,7 @@ sctui_attr_off(void)
 	strcpy(global_sctui.cbuf, ESC_SGR_BEG
 			ESC_SGR_RESET
 			ESC_SGR_END);
+	global_sctui.last_attr = 0;
 	return global_sctui.cbuf;
 }
 
@@ -186,6 +200,7 @@ sctui_attr_on(int attr)
 	if (SCTUI_FG(attr))
 		s += sprintf(s, ";%d", 30 + (attr & 0x07));
 	s += sprintf(s, ESC_SGR_END);
+	global_sctui.last_attr = attr;
 	return global_sctui.cbuf;
 }
 
@@ -262,10 +277,19 @@ sctui_out(const char *str, int len)
 {
 	if (len == 0)
 		len = strlen(str);
-	if (len > (int)sizeof(global_sctui.buf) - global_sctui.bufp)
+	if (len > (int)SCTUI_BUF_REM)
 		sctui_commit();
 	memcpy(global_sctui.buf + global_sctui.bufp, str, len);
 	global_sctui.bufp += len;
+}
+
+void
+sctui_outc(char c)
+{
+	if (SCTUI_BUF_REM <= 0)
+		sctui_commit();
+	global_sctui.buf[global_sctui.bufp] = c;
+	global_sctui.bufp += 1;
 }
 
 void

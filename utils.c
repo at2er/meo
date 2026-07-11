@@ -1,10 +1,12 @@
 /* SPDX-License-Identifier: MIT */
+#include <ctype.h>
 #include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include "utils.h"
+#include "grapheme.h"
 #include "sctui.h"
+#include "utils.h"
 
 int
 align(int num, int min, int max)
@@ -52,15 +54,41 @@ erealloc(void *p, size_t s)
 	return p;
 }
 
-size_t
-_arealloc(void **p, size_t n, size_t o)
+char *
+toprint(char buf[2], char c)
 {
-	if (!(*p)) {
-		*p = calloc(1, n);
-		return n;
+	if (isprint(c)) {
+		buf[0] = c;
+		buf[1] = '\0';
+	} else {
+		buf[0] = '^';
+		if (c == 127)
+			buf[1] = '?';
+		else
+			buf[1] = c + 0x40;
 	}
-	if (o >= n)
-		return o;
-	*p = erealloc(*p, n);
-	return n;
+	return buf;
+}
+
+int
+ustrlen(const char *s)
+{
+	int ulen = 0;
+	for (int i = 0; s[i]; ulen++)
+		i += grapheme_next_character_break_utf8(s+i, SIZE_MAX);
+	return ulen;
+}
+
+int
+utf8_blen(unsigned char first_byte)
+{
+	if (first_byte <= 0x7F)
+		return 1;
+	else if (RANGE(first_byte, 0xC0, 0xDF))
+		return 2;
+	else if (RANGE(first_byte, 0xE0, 0xEF))
+		return 3;
+	else if (RANGE(first_byte, 0xF0, 0xF7))
+		return 4;
+	return -1;
 }

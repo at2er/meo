@@ -19,6 +19,11 @@ But multi-edition isn't expected function.
 Try `export LD_LIBRARY_PATH=/usr/local/lib` if your
 libgrapheme was installed in `/usr/local`.
 
+### wcwidth()
+You need the termux's
+[wcwidth](https://github.com/termux/wcwidth)
+to implement the f**king `wcwidth()`
+
 # Others
 > I am trying to use meo to develop meo now.
 > So it's usable! *but still in experimental stage*
