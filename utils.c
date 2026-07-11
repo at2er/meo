@@ -8,8 +8,8 @@
 #include "sctui.h"
 #include "utils.h"
 
-int
-align(int num, int min, int max)
+unsigned int
+align(unsigned int num, unsigned int min, unsigned int max)
 {
 	if (num > max)
 		num = max;
@@ -71,9 +71,9 @@ toprint(char buf[2], char c)
 }
 
 int
-ustrlen(const char *s)
+unsigned ustrlen(const char *s)
 {
-	int ulen = 0;
+	unsigned int ulen = 0;
 	for (int i = 0; s[i]; ulen++)
 		i += grapheme_next_character_break_utf8(s+i, SIZE_MAX);
 	return ulen;

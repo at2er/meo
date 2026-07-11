@@ -8,12 +8,12 @@
 #define LENGTH(ARR) (sizeof(ARR) / sizeof((ARR)[0]))
 #define RANGE(X, MIN, MAX) ((X) >= (MIN) && (X) <= (MAX))
 
-int align(int num, int min, int max);
+unsigned int align(unsigned int num, unsigned int min, unsigned int max);
 void die(const char *msg, ...);
 void *ecalloc(size_t nmenb, size_t size);
 void *erealloc(void *p, size_t s);
 char *toprint(char buf[2], char c);
-int ustrlen(const char *str);
+unsigned int ustrlen(const char *str);
 int utf8_blen(unsigned char first_byte);
 
 size_t _arealloc(void **p, size_t n, size_t o);

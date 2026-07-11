@@ -35,7 +35,7 @@ typedef union arg Arg;
 
 #define lineof(LINK) utilsh_list_container_of(LINK, Line, link)
 
-enum { ModeN, ModeI };
+enum { ModeN, ModeI, ModeV };
 
 typedef struct Buf {
 	struct utilsh_list_head lines, undos;
@@ -116,6 +116,8 @@ static void newtab(const Arg *arg);
 static void pollev(void);
 static int pollkey(void);
 static void removeln(Buf *b, Line *l);
+static void setcol(unsigned int col);
+static void setrow(unsigned int row);
 static void swappos(Pos **beg, Pos **end);
 
 static int cmode = ModeN;
@@ -346,10 +348,9 @@ einsert(const struct str *content)
 	const char *s = content->s;
 	struct str tmp, save = {0};
 
-	if (cwin->l->s.s[bcol] != '\n') {
-		estr_from_cstr(&save, cwin->l->s.s + bcol);
-		estr_remove(&cwin->l->s, bcol, cwin->l->s.len - bcol);
-	}
+	estr_from_cstr(&save, cwin->l->s.s + bcol);
+	estr_remove(&cwin->l->s, bcol, cwin->l->s.len - bcol);
+
 	while ((s = iterstr(&tmp, s))) {
 		if (tmp.s != content->s) {
 			cwin->row++;
@@ -358,10 +359,10 @@ einsert(const struct str *content)
 		estr_append_str(&cwin->l->s, &tmp);
 		cwin->col += tmp.len;
 	}
+
 	if (save.s)
 		estr_append_str(&cwin->l->s, &save);
-	else
-		estr_append_chr(&cwin->l->s, '\n');
+
 	str_free(&save);
 }
 
@@ -556,38 +557,17 @@ mode(const Arg *arg)
 void
 movedown(const Arg *arg)
 {
-	int orow = cwin->row;
-	if (cwin->row == 0 && arg->i < 0) {
-		cwin->row = 0;
-	} else {
-		cwin->row += arg->i;
-		if (cwin->row >= cwin->b->nline)
-			cwin->row = cwin->b->nline - 1;
-	}
-	if (cwin->row < cwin->rowoff) {
-		cwin->rowoff = cwin->row;
-	} else if (cwin->row >= cwin->rowoff + cwin->h) {
-		cwin->rowoff = cwin->row - cwin->h + 1;
-	}
-	cwin->l = getln(cwin->l, orow, cwin->row);
-	moveright(&ARG(0));
+	if (cwin->row == 0 && arg->i < 0)
+		return;
+	setrow(cwin->row + arg->i);
 }
 
 void
 moveright(const Arg *arg)
 {
-	if (cwin->col == 0 && arg->i < 0) {
-		cwin->col = 0;
-	} else {
-		cwin->col += arg->i;
-		if (cwin->col >= cwin->l->s.len)
-			cwin->col = cwin->l->s.len - 1;
-	}
-	if (cwin->col < cwin->coloff) {
-		cwin->coloff = cwin->col;
-	} else if (cwin->col >= cwin->coloff + scrw) {
-		cwin->coloff = cwin->col - scrw + 1;
-	}
+	if (cwin->col == 0 && arg->i < 0)
+		return;
+	setcol(cwin->col + arg->i);
 }
 
 void
@@ -630,6 +610,29 @@ removeln(Buf *b, Line *l)
 	list_remove(&b->lines, &l->link);
 	str_free(&l->s);
 	free(l);
+}
+
+void
+setcol(unsigned int col)
+{
+	cwin->col = align(col, 0, ustrlen(cwin->l->s.s) - 1);
+	if (cwin->col < cwin->coloff)
+		cwin->coloff = cwin->col;
+	else if (cwin->col >= cwin->coloff + scrw)
+		cwin->coloff = cwin->col - scrw + 1;
+}
+
+void
+setrow(unsigned int row)
+{
+	unsigned int orow = cwin->row;
+	cwin->row = align(row, 0, cwin->b->nline - 1);
+	if (cwin->row < cwin->rowoff)
+		cwin->rowoff = cwin->row;
+	else if (cwin->row >= cwin->rowoff + cwin->h)
+		cwin->rowoff = cwin->row - cwin->h + 1;
+	cwin->l = getln(cwin->l, orow, cwin->row);
+	setcol(cwin->col);
 }
 
 void
