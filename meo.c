@@ -107,7 +107,7 @@ static int cmdquit(int argc, const char *argv[]);
 static unsigned int coltobcol(Line *l, unsigned int col);
 static void draw(void);
 static void drawbar(void);
-static void drawline(struct str *s);
+static void drawline(struct str *s, int selbeg, int selend);
 static void drawwin(Win *w, unsigned int y, unsigned int h);
 static Edit *edit(const Edit *e);
 static void einsert(const struct str *content);
@@ -139,6 +139,7 @@ static int cmode = ModeN;
 static Tab *ctab;
 #define cwin (ctab->w)
 static int running;
+static int selected;
 static pfds_t pfds;
 static char sbuf[BUFSIZ], rbuf[UCHR_RENDER_MAX];
 static struct str barbuf;
@@ -151,6 +152,7 @@ static int keyev;
  * '\'': explicit selection by user
  * '"':  implicit selection like some jumping actions */
 static Mark marks[10 + 26 + 2];
+#define SELMARK marks[10 + 26]
 
 static struct option opts[] = {
 	OPT_END
@@ -254,38 +256,66 @@ drawbar(void)
 
 	sctui_out(sctui_attr_on(barattr), 0);
 	sctui_move(0, scrh);
-	drawline(&barbuf);
+	drawline(&barbuf, -1, -1);
 	sctui_out(sctui_attr_off(), 0);
 
 	estr_clean(&barbuf);
 }
 
 void
-drawline(struct str *s)
+drawline(struct str *s, int selbeg, int selend)
 {
+	int i, wsum = 0;
 	size_t ret, off;
 	Uchr uc;
-	int wsum = 0;
 
-	for (off = 0; (ret = renderchr(&uc, s->s + off)) > 0; off += ret) {
+	for (i = off = 0; (ret = renderchr(&uc, s->s + off)) > 0; off += ret, i++) {
+		if (i == selbeg)
+			sctui_out(sctui_attr_on(selattr), 0);
+		else if (i == selend)
+			sctui_out(sctui_attr_off(), 0);
 		wsum += uc.w;
 		if (wsum > scrw)
 			return;
 		sctui_out(rbuf, uc.blen);
 	}
-	for (int c = scrw - wsum, i = 0; i < c; i++)
+
+	for (int c = scrw - wsum; c; c--, i++) {
+		if (i == selend)
+			sctui_out(sctui_attr_off(), 0);
 		sctui_outc(' ');
-	return;
+	}
 }
 
 void
 drawwin(Win *w, unsigned int y, unsigned int h)
 {
+	/* shits, don't read it */
 	Line *d = getln(w->l, w->row, w->rowoff);
+	LineIter iter;
 	unsigned int nl;
-	for (nl = 0; nl < h; nl++, d = lineof(d->link.nex)) {
+	int s = selected && w->b == SELMARK.b, selbeg, selend;
+	Pos _beg = SELMARK.p, _end, *beg = &_beg, *end = &_end;
+
+	if (s) {
+		_end.row = w->row;
+		_end.col = w->col;
+		swappos(&beg, &end);
+		iter.beg = *beg;
+		iter.end = *end;
+		iter.lrow = w->rowoff;
+	}
+
+	for (nl = 0; nl < h; nl++, d = lineof(d->link.nex), iter.lrow++) {
 		sctui_move(0, y + nl);
-		drawline(&d->s);
+		iter.l = iter.nex = d;
+		if (s && iterln(&iter)) {
+			selbeg = iter.lstart;
+			selend = iter.lend;
+		} else {
+			selbeg = selend = -1;
+		}
+		drawline(&d->s, selbeg, selend);
 		if (!d->link.nex)
 			break;
 	}
@@ -399,7 +429,7 @@ getmark(int idx)
 	} else if (islower(idx)) {
 		idx = idx - 'a' + 10;
 	} else if (idx == '\'') {
-		idx = 10 + 26;
+		idx = &SELMARK - marks;
 	} else {
 		return NULL;
 	}
@@ -443,7 +473,7 @@ handlekey(void)
 		if (!caninsert())
 			goto drop;
 		for (int i = 0; i < skb_ncombo; i++, buf++) {
-			if (iscntrl(skb_combo[i]))
+			if (iscntrl(skb_combo[i]) && skb_combo[i] != '\n')
 				goto drop;
 			*buf = skb_combo[i];
 		}
@@ -487,7 +517,9 @@ iterln(LineIter *li)
 		li->lrow++;
 
 	li->l = li->nex;
-	if (li->beg.row == li->end.row) {
+	if (li->lrow < li->beg.row || li->lrow > li->end.row) {
+		return NULL;
+	} else if (li->beg.row == li->end.row) {
 		if (li->beg.col == li->end.col)
 			return NULL;
 		li->lstart = li->beg.col;
@@ -564,10 +596,16 @@ matchcmd(const char *name)
 void
 mode(const Arg *arg)
 {
+	int omode = cmode;
 	cmode = arg->i;
 	switch (cmode) {
 	case ModeV:
 		mark(&ARG(.i = '\''));
+		selected = 1;
+		break;
+	default:
+		if (omode == ModeV)
+			selected = 0;
 		break;
 	}
 }
