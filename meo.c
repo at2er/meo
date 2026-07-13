@@ -21,6 +21,8 @@
 
 typedef union arg Arg;
 
+#define UCHR_RENDER_MAX 256
+
 #define scrw global_sctui.w
 #define scrh global_sctui.h
 #define ARG(...) (const Arg){__VA_ARGS__}
@@ -51,7 +53,6 @@ typedef struct Cmd {
 typedef struct Pos {
 	unsigned int row, col;
 } Pos;
-
 typedef struct Edit {
 	Pos beg, end;
 	struct str replace;
@@ -68,6 +69,12 @@ typedef struct LineIter {
 	unsigned int lstart, lend, lrow;
 } LineIter;
 
+typedef struct Mark {
+	Buf *b;
+	Pos p;
+	unsigned int rowoff, coloff;
+} Mark;
+
 typedef struct Win {
 	Buf *b;
 	Line *l;
@@ -75,11 +82,15 @@ typedef struct Win {
 	             col, coloff,
 	             h;
 } Win;
-
 typedef struct Tab {
 	Win main, bottom;
 	Win *w;
 } Tab;
+
+typedef struct Uchr {
+	int w, blen;
+	uint_least32_t cp;
+} Uchr;
 
 typedef struct Undo {
 	Edit e;
@@ -102,12 +113,15 @@ static Edit *edit(const Edit *e);
 static void einsert(const struct str *content);
 static Line *freadline(FILE *fp);
 static Line *getln(Line *curl, unsigned int crow, unsigned int row);
+static Mark *getmark(int idx);
 static unsigned int getrx(Line *l, unsigned int col);
+static void gotomark(const Arg *arg);
 static void handlekey(void);
 static void insert(const Arg *arg);
 static Line *iterln(LineIter *li);
 static const char *iterstr(struct str *result, const char *str);
 static void makelniter(LineIter *li, Pos *beg, Pos *end);
+static void mark(const Arg *arg);
 static const Cmd *matchcmd(const char *name);
 static void mode(const Arg *arg);
 static void movedown(const Arg *arg);
@@ -116,6 +130,7 @@ static void newtab(const Arg *arg);
 static void pollev(void);
 static int pollkey(void);
 static void removeln(Buf *b, Line *l);
+static size_t renderchr(Uchr *uc, const char *s);
 static void setcol(unsigned int col);
 static void setrow(unsigned int row);
 static void swappos(Pos **beg, Pos **end);
@@ -125,12 +140,17 @@ static Tab *ctab;
 #define cwin (ctab->w)
 static int running;
 static pfds_t pfds;
-static char sbuf[BUFSIZ];
+static char sbuf[BUFSIZ], rbuf[UCHR_RENDER_MAX];
 static struct str barbuf;
 static tabs_t tabs;
 
 /* events */
 static int keyev;
+
+/* numbers + lowers + '\'' + '"'
+ * '\'': explicit selection by user
+ * '"':  implicit selection like some jumping actions */
+static Mark marks[10 + 26 + 2];
 
 static struct option opts[] = {
 	OPT_END
@@ -243,48 +263,16 @@ drawbar(void)
 void
 drawline(struct str *s)
 {
-	int w, wsum = 0, replace;
-	uint_least32_t cp;
 	size_t ret, off;
-	char *sb;
+	Uchr uc;
+	int wsum = 0;
 
-	grapheme_decode_iter(s->s, ret, off, cp) {
-		replace = 0;
-		sb = sbuf;
-		w = wcwidth((wchar_t)cp);
-
-		switch (cp) {
-		case L'\n':
-			goto fill;
-		case L'\t':
-			w = strlen(tabrender);
-			strcpy(sb, tabrender);
-			replace = 1;
-			break;
-		default:
-			if (w <= 0) {
-				w = 2;
-				sb += sprintf(sb, "%s", sctui_attr_on(nonprintattr));
-				toprint(sb, cp);
-				sb += 2;
-				sb += sprintf(sb, "%s", sctui_attr_off());
-				sb += sprintf(sb, "%s", sctui_attr_last());
-				replace = 1;
-			}
-			break;
-		}
-
-		wsum += w;
+	for (off = 0; (ret = renderchr(&uc, s->s + off)) > 0; off += ret) {
+		wsum += uc.w;
 		if (wsum > scrw)
 			return;
-
-		if (replace)
-			sctui_out(sbuf, 0);
-		else
-			sctui_out(s->s + off, ret);
+		sctui_out(rbuf, uc.blen);
 	}
-
-fill:
 	for (int c = scrw - wsum, i = 0; i < c; i++)
 		sctui_outc(' ');
 	return;
@@ -403,35 +391,44 @@ getln(Line *curl, unsigned int crow, unsigned int row)
 	return lineof(link);
 }
 
+Mark *
+getmark(int idx)
+{
+	if (isdigit(idx)) {
+		idx -= '0';
+	} else if (islower(idx)) {
+		idx = idx - 'a' + 10;
+	} else if (idx == '\'') {
+		idx = 10 + 26;
+	} else {
+		return NULL;
+	}
+	return &marks[idx];
+
+}
+
 unsigned int
 getrx(Line *l, unsigned int col)
 {
-	uint_least32_t cp;
-	unsigned i, rx;
+	unsigned int i, rx;
 	size_t ret, off;
-	int w;
+	Uchr uc;
 
 	i = rx = 0;
-	grapheme_decode_iter(l->s.s, ret, off, cp) {
+
+	for (off = 0; (ret = renderchr(&uc, l->s.s + off)) > 0; off += ret) {
 		if (i >= col)
 			break;
-		switch (cp) {
-		case L'\n':
-			return rx;
-		case L'\t':
-			rx += strlen(tabrender);
-			break;
-		default:
-			w = wcwidth((wchar_t)cp);
-			if (w <= 0)
-				w = 2;
-			rx += w;
-			break;
-		}
+		rx += uc.w;
 		i++;
 	}
 
 	return rx;
+}
+
+void
+gotomark(const Arg *arg)
+{
 }
 
 void
@@ -538,6 +535,22 @@ makelniter(LineIter *li, Pos *beg, Pos *end)
 	li->lrow = li->beg.row;
 }
 
+void
+mark(const Arg *arg)
+{
+	int k = arg->i;
+	Mark *m;
+	if (k == 0)
+		k = pollkey();
+	if (!(m = getmark(k)))
+		return;
+	m->b = cwin->b;
+	m->p.row = cwin->row;
+	m->p.col = cwin->col;
+	m->rowoff = cwin->rowoff;
+	m->coloff = cwin->coloff;
+}
+
 const Cmd *
 matchcmd(const char *name)
 {
@@ -552,6 +565,11 @@ void
 mode(const Arg *arg)
 {
 	cmode = arg->i;
+	switch (cmode) {
+	case ModeV:
+		mark(&ARG(.i = '\''));
+		break;
+	}
 }
 
 void
@@ -610,6 +628,43 @@ removeln(Buf *b, Line *l)
 	list_remove(&b->lines, &l->link);
 	str_free(&l->s);
 	free(l);
+}
+
+size_t
+renderchr(Uchr *uc, const char *s)
+{
+	size_t ret = grapheme_decode_utf8(s, SIZE_MAX, &uc->cp);
+	char *sb = rbuf;
+
+	if (ret == 0 || uc->cp == 0)
+		return 0;
+
+	uc->blen = ret;
+	if (ret == 1)
+		sb[0] = *s;
+	else
+		strncpy(sb, s, ret);
+	switch (uc->cp) {
+	case L'\n':
+		return 0;
+	case L'\t':
+		uc->blen = uc->w = strlen(tabrender);
+		strcpy(sb, tabrender);
+		break;
+	default:
+		if ((uc->w = wcwidth(uc->cp)) <= 0) {
+			uc->w = 2;
+			sb += sprintf(sb, "%s", sctui_attr_on(nonprintattr));
+			toprint(sb, uc->cp);
+			sb += 2;
+			sb += sprintf(sb, "%s", sctui_attr_off());
+			sb += sprintf(sb, "%s", sctui_attr_last());
+			uc->blen = sb - rbuf;
+		}
+		break;
+	}
+
+	return ret;
 }
 
 void
