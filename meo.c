@@ -100,6 +100,7 @@ typedef struct Undo {
 typedef darr(struct pollfd) pfds_t;
 typedef darr(Tab) tabs_t;
 
+static void backspace(const Arg *arg);
 static int caninsert(void);
 static void cmd(const Arg *arg);
 static int cmdedit(int argc, const char *argv[]);
@@ -112,6 +113,8 @@ static void drawwin(Win *w, unsigned int y, unsigned int h);
 static Edit *edit(const Edit *e);
 static void einsert(const struct str *content);
 static Line *enewline(Buf *b, Line *at);
+static void eremove(unsigned int beg, unsigned int end);
+static void eremovem(Pos *beg, Pos *end);
 static Line *freadline(FILE *fp);
 static Line *getln(Line *curl, unsigned int crow, unsigned int row);
 static Mark *getmark(int idx);
@@ -160,6 +163,24 @@ static struct option opts[] = {
 };
 
 #include "config.h"
+
+void
+backspace(const Arg *arg)
+{
+	Edit e = {0};
+	e.end.row = cwin->row;
+	e.end.col = cwin->col;
+	e.beg = e.end;
+
+	if (e.beg.col == 0) {
+		if (e.beg.row == 0)
+			return;
+	} else {
+		e.beg.col--;
+	}
+
+	edit(&e);
+}
 
 int
 caninsert(void)
@@ -326,33 +347,18 @@ Edit *
 edit(const Edit *e)
 {
 	Pos _beg = e->beg, _end = e->end, *beg = &_beg, *end = &_end;
-	unsigned int bcol, orow = cwin->row;
-	Line *l, *begln, *nex;
+	unsigned int orow = cwin->row;
 
 	swappos(&beg, &end);
 
 	cwin->col = e->beg.col;
 	cwin->row = e->beg.row;
-	cwin->l = begln = getln(cwin->l, orow, cwin->row);
+	cwin->l = getln(cwin->l, orow, cwin->row);
 
-	if (e->beg.row == e->end.row) {
-	} else {
-		bcol = coltobcol(cwin->l, cwin->col);
-		estr_remove(&cwin->l->s, bcol, cwin->l->s.len - bcol);
-
-		nex = cwin->l;
-		for (unsigned int lrow = e->beg.row; lrow != e->end.row; lrow++) {
-			l = nex;
-			nex = lineof(l->link.nex);
-			removeln(cwin->b, cwin->l);
-		}
-
-		/* l == e->end.row */
-		bcol = coltobcol(l, e->end.col);
-		if (bcol < l->s.len)
-			estr_append_cstr(&begln->s, l->s.s + bcol);
-		removeln(cwin->b, l);
-	}
+	if (e->beg.row == e->end.row)
+		eremove(beg->col, end->col);
+	else
+		eremovem(beg, end);
 
 	if (e->replace.s)
 		einsert(&e->replace);
@@ -396,6 +402,36 @@ enewline(Buf *b, Line *at)
 	list_insert(&b->lines, &at->link, &l->link);
 	b->nline++;
 	return l;
+}
+
+void
+eremove(unsigned int beg, unsigned int end)
+{
+	unsigned int bbeg = coltobcol(cwin->l, beg),
+	             bend = coltobcol(cwin->l, end);
+	estr_remove(&cwin->l->s, bbeg, bend - bbeg);
+}
+
+void
+eremovem(Pos *beg, Pos *end)
+{
+	unsigned int bcol = coltobcol(cwin->l, cwin->col);
+	Line *begln = cwin->l, *l, *nex;
+
+	estr_remove(&cwin->l->s, bcol, cwin->l->s.len - bcol);
+
+	nex = cwin->l;
+	for (unsigned int lrow = beg->row; lrow != end->row; lrow++) {
+		l = nex;
+		nex = lineof(l->link.nex);
+		removeln(cwin->b, l);
+	}
+
+	/* l == e->end.row */
+	bcol = coltobcol(l, end->col);
+	if (bcol < l->s.len)
+		estr_append_cstr(&begln->s, l->s.s + bcol);
+	removeln(cwin->b, l);
 }
 
 Line *

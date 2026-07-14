@@ -11,6 +11,7 @@ static const char *modestr[] = {
 	NULL
 };
 
+#define KBS  127
 #define KESC 27
 
 static const struct key keys_n[] = {
@@ -32,8 +33,10 @@ static const struct key keys_i[] = {
 	{ { CTRL('b') }, moveright, {.i = -1}     },
 	{ { CTRL('c') }, mode,      {.i = ModeN}  },
 	{ { CTRL('f') }, moveright, {.i =  1}     },
+	{ { CTRL('h') }, backspace, {0}           },
 	{ { CTRL('n') }, movedown,  {.i =  1}     },
 	{ { CTRL('p') }, movedown,  {.i = -1}     },
+	{ { KBS       }, backspace, {0}           },
 	{ { KESC      }, mode,      {.i = ModeN}  },
 	{ { 0         }, NULL,      {0}           }
 };
