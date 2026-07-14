@@ -111,6 +111,7 @@ static void drawline(struct str *s, int selbeg, int selend);
 static void drawwin(Win *w, unsigned int y, unsigned int h);
 static Edit *edit(const Edit *e);
 static void einsert(const struct str *content);
+static Line *enewline(Buf *b, Line *at);
 static Line *freadline(FILE *fp);
 static Line *getln(Line *curl, unsigned int crow, unsigned int row);
 static Mark *getmark(int idx);
@@ -370,18 +371,32 @@ einsert(const struct str *content)
 	estr_remove(&cwin->l->s, bcol, cwin->l->s.len - bcol);
 
 	while ((s = iterstr(&tmp, s))) {
-		if (tmp.s != content->s) {
+		if (tmp.len == 1 && tmp.s[0] == '\n') {
+			estr_append_chr(&cwin->l->s, '\n');
 			cwin->row++;
 			cwin->col = 0;
+			cwin->l = enewline(cwin->b, cwin->l);
+		} else {
+			estr_append_str(&cwin->l->s, &tmp);
+			cwin->col += tmp.len;
 		}
-		estr_append_str(&cwin->l->s, &tmp);
-		cwin->col += tmp.len;
 	}
 
 	if (save.s)
 		estr_append_str(&cwin->l->s, &save);
 
 	str_free(&save);
+}
+
+/* l1 -> l2
+ * l1 -> l3 -> l2 (insert l3 at l1) */
+Line *
+enewline(Buf *b, Line *at)
+{
+	Line *l = ecalloc(1, sizeof(*l));
+	list_insert(&b->lines, &at->link, &l->link);
+	b->nline++;
+	return l;
 }
 
 Line *
@@ -565,8 +580,12 @@ iterstr(struct str *result, const char *str)
 	result->s = (char*)str;
 	for (; *str && *str != '\n'; str++);
 	result->len = result->siz = str - result->s;
-	if (result->len == 0)
-		return NULL;
+	if (result->len == 0) {
+		if (*str != '\n')
+			return NULL;
+		str++;
+		result->len = result->siz = 1;
+	}
 	return str;
 }
 
