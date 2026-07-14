@@ -459,6 +459,21 @@ getrx(Line *l, unsigned int col)
 void
 gotomark(const Arg *arg)
 {
+	unsigned int orow = cwin->row;
+	int k = arg->i;
+	Mark *m;
+	if (k == 0)
+		k = pollkey();
+	if (!(m = getmark(k)))
+		return;
+	if (!m->b)
+		return;
+	cwin->b = m->b;
+	cwin->row = m->p.row;
+	cwin->col = m->p.col;
+	cwin->rowoff = m->rowoff;
+	cwin->coloff = m->coloff;
+	cwin->l = getln(cwin->l, orow, cwin->row);
 }
 
 void
