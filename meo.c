@@ -372,7 +372,6 @@ einsert(const struct str *content)
 
 	while ((s = iterstr(&tmp, s))) {
 		if (tmp.len == 1 && tmp.s[0] == '\n') {
-			estr_append_chr(&cwin->l->s, '\n');
 			cwin->row++;
 			cwin->col = 0;
 			cwin->l = enewline(cwin->b, cwin->l);
@@ -420,8 +419,8 @@ freadline(FILE *fp)
 		free(l);
 		return NULL;
 	}
-	if (l->s.s[l->s.len - 1] != '\n')
-		estr_append_chr(&l->s, '\n');
+	if (l->s.s[l->s.len - 1] == '\n')
+		estr_remove(&l->s, l->s.len - 1, 1);
 	return l;
 }
 
@@ -742,7 +741,7 @@ renderchr(Uchr *uc, const char *s)
 void
 setcol(unsigned int col)
 {
-	cwin->col = align(col, 0, ustrlen(cwin->l->s.s) - 1);
+	cwin->col = align(col, 0, ustrlen(cwin->l->s.s));
 	if (cwin->col < cwin->coloff)
 		cwin->coloff = cwin->col;
 	else if (cwin->col >= cwin->coloff + scrw)
