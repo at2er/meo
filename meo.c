@@ -292,7 +292,7 @@ drawline(struct str *s, int selbeg, int selend)
 	Uchr uc;
 
 	for (i = off = 0; (ret = renderchr(&uc, s->s + off)) > 0; off += ret, i++) {
-		if (i == selbeg)
+		if (i == selbeg && selend != 0)
 			sctui_out(sctui_attr_on(selattr), 0);
 		else if (i == selend)
 			sctui_out(sctui_attr_off(), 0);
@@ -592,14 +592,14 @@ iterln(LineIter *li)
 		goto end;
 	} else if (li->lrow == li->beg.row) {
 		li->lstart = li->beg.col;
-		li->lend = ustrlen(li->l->s.s);
+		li->lend = ustrlen(li->l->s.s) + 1;
 	} else if (li->lrow == li->end.row) {
 		li->lstart = 0;
 		li->lend = li->end.col;
 		goto end;
 	} else {
 		li->lstart = 0;
-		li->lend = ustrlen(li->l->s.s);
+		li->lend = ustrlen(li->l->s.s) + 1;
 	}
 
 	li->nex = lineof(li->l->link.nex);
