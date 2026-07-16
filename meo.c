@@ -37,7 +37,7 @@ typedef union arg Arg;
 
 #define lineof(LINK) utilsh_list_container_of(LINK, Line, link)
 
-enum { ModeN, ModeI, ModeV };
+enum { ModeN, ModeC, ModeI, ModeV };
 
 typedef struct Buf {
 	struct utilsh_list_head lines, undos;
@@ -47,7 +47,7 @@ typedef struct Buf {
 
 typedef struct Cmd {
 	const char *name;
-	int (*func)(int argc, const char *argv[]);
+	void (*func)(int argc, const char *argv[]);
 } Cmd;
 
 typedef struct Pos {
@@ -79,12 +79,12 @@ typedef struct Win {
 	Buf *b;
 	Line *l;
 	unsigned int row, rowoff,
-	             col, coloff,
-	             h;
+	             col, coloff;
+	unsigned int x, y, h, w;
 } Win;
 typedef struct Tab {
 	Win main, bottom;
-	Win *w;
+	Win *w, *ow;
 } Tab;
 
 typedef struct Uchr {
@@ -103,13 +103,15 @@ typedef darr(Tab) tabs_t;
 static void backspace(const Arg *arg);
 static int caninsert(void);
 static void cmd(const Arg *arg);
-static int cmdedit(int argc, const char *argv[]);
-static int cmdquit(int argc, const char *argv[]);
+static void cmdedit(int argc, const char *argv[]);
+static void cmdquit(int argc, const char *argv[]);
+static void cmdwrite(int argc, const char *argv[]);
 static unsigned int coltobcol(Line *l, unsigned int col);
 static void draw(void);
 static void drawbar(void);
-static void drawline(struct str *s, int selbeg, int selend);
-static void drawwin(Win *w, unsigned int y, unsigned int h);
+static void drawcmdline(void);
+static void drawline(struct str *s, unsigned int x, int selbeg, int selend);
+static void drawwin(Win *w);
 static Edit *edit(const Edit *e);
 static void einsert(const struct str *content);
 static Line *enewline(Buf *b, Line *at);
@@ -121,6 +123,7 @@ static Mark *getmark(int idx);
 static unsigned int getrx(Line *l, unsigned int col);
 static void gotomark(const Arg *arg);
 static void handlekey(void);
+static void initcmdbuf(void);
 static void insert(const Arg *arg);
 static Line *iterln(LineIter *li);
 static const char *iterstr(struct str *result, const char *str);
@@ -139,6 +142,8 @@ static void setcol(unsigned int col);
 static void setrow(unsigned int row);
 static void swappos(Pos **beg, Pos **end);
 
+static Buf cmdbuf;
+static Win cmdline;
 static int cmode = ModeN;
 static Tab *ctab;
 #define cwin (ctab->w)
@@ -186,7 +191,7 @@ int
 caninsert(void)
 {
 	switch (cmode) {
-	case ModeI:
+	case ModeC: case ModeI:
 		return 1;
 	default:
 		return 0;
@@ -198,7 +203,20 @@ cmd(const Arg *arg)
 {
 	darr(char *) args;
 	const Cmd *c;
-	char *dup = strdup(arg->s), *saver, *tok;
+	char *dup = NULL, *saver, *tok;
+
+	if (arg->s)
+		dup = strdup(arg->s);
+	if (cmode == ModeC) {
+		mode(&ARG(.i = ModeN));
+		if (!cmdline.l->s.s[0])
+			return;
+		if (!dup)
+			dup = strdup(cmdline.l->s.s);
+	}
+
+	if (!dup)
+		return;
 
 	darr_init(&args);
 
@@ -216,7 +234,7 @@ clean:
 	free(dup);
 }
 
-int
+void
 cmdedit(int argc, const char *argv[])
 {
 	Buf *b;
@@ -224,7 +242,7 @@ cmdedit(int argc, const char *argv[])
 	Line *l;
 
 	if (!(fp = fopen(argv[1], "r")))
-		return 1;
+		return;
 
 	b = ecalloc(1, sizeof(*b));
 	strcpy(b->path, argv[1]);
@@ -233,15 +251,34 @@ cmdedit(int argc, const char *argv[])
 		list_insert(&b->lines, b->lines.end, &l->link);
 	ctab->main.b = b;
 	ctab->main.l = lineof(b->lines.beg);
-
-	return 0;
 }
 
-int
+void
 cmdquit(int argc, const char *argv[])
 {
 	running = 0;
-	return 0;
+}
+
+void
+cmdwrite(int argc, const char *argv[])
+{
+	FILE *fp;
+	const char *path;
+
+	if (argc <= 1 || !argv[1])
+		path = cwin->b->path;
+	else
+		path = argv[1];
+
+	if (!(fp = fopen(path, "w")))
+		return;
+
+	list_for_each(Line, l, cwin->b->lines.beg, tmp, link) {
+		fputs(l->s.s, fp);
+		fputc('\n', fp);
+	}
+
+	fclose(fp);
 }
 
 unsigned int
@@ -256,12 +293,15 @@ coltobcol(Line *l, unsigned int col)
 void
 draw(void)
 {
-	drawbar();
-	drawwin(&ctab->main, 0, ctab->main.h);
+	if (cmode == ModeC)
+		drawcmdline();
+	else
+		drawbar();
+	drawwin(&ctab->main);
 	if (ctab->bottom.h)
-		drawwin(&ctab->bottom, ctab->main.h, ctab->bottom.h);
-	sctui_move(getrx(cwin->l, cwin->col),
-			cwin->row - cwin->rowoff);
+		drawwin(&ctab->bottom);
+	sctui_move(cwin->x + getrx(cwin->l, cwin->col),
+			cwin->y + cwin->row - cwin->rowoff);
 	sctui_commit();
 }
 
@@ -278,16 +318,23 @@ drawbar(void)
 
 	sctui_out(sctui_attr_on(barattr), 0);
 	sctui_move(0, scrh);
-	drawline(&barbuf, -1, -1);
+	drawline(&barbuf, scrw, -1, -1);
 	sctui_out(sctui_attr_off(), 0);
 
 	estr_clean(&barbuf);
 }
 
 void
-drawline(struct str *s, int selbeg, int selend)
+drawcmdline(void)
 {
-	int i, wsum = 0;
+	drawwin(&cmdline);
+}
+
+void
+drawline(struct str *s, unsigned int w, int selbeg, int selend)
+{
+	int i;
+	unsigned int wsum = 0;
 	size_t ret, off;
 	Uchr uc;
 
@@ -297,12 +344,12 @@ drawline(struct str *s, int selbeg, int selend)
 		else if (i == selend)
 			sctui_out(sctui_attr_off(), 0);
 		wsum += uc.w;
-		if (wsum > scrw)
+		if (wsum > w)
 			return;
 		sctui_out(rbuf, uc.blen);
 	}
 
-	for (int c = scrw - wsum; c; c--, i++) {
+	for (unsigned int c = w - wsum; c; c--, i++) {
 		if (i == selend)
 			sctui_out(sctui_attr_off(), 0);
 		sctui_outc(' ');
@@ -310,7 +357,7 @@ drawline(struct str *s, int selbeg, int selend)
 }
 
 void
-drawwin(Win *w, unsigned int y, unsigned int h)
+drawwin(Win *w)
 {
 	/* shits, don't read it */
 	Line *d = getln(w->l, w->row, w->rowoff);
@@ -328,8 +375,8 @@ drawwin(Win *w, unsigned int y, unsigned int h)
 		iter.lrow = w->rowoff;
 	}
 
-	for (nl = 0; nl < h; nl++, d = lineof(d->link.nex), iter.lrow++) {
-		sctui_move(0, y + nl);
+	for (nl = 0; nl < w->h; nl++, d = lineof(d->link.nex), iter.lrow++) {
+		sctui_move(w->x, w->y + nl);
 		iter.l = iter.nex = d;
 		if (s && iterln(&iter)) {
 			selbeg = iter.lstart;
@@ -337,7 +384,7 @@ drawwin(Win *w, unsigned int y, unsigned int h)
 		} else {
 			selbeg = selend = -1;
 		}
-		drawline(&d->s, selbeg, selend);
+		drawline(&d->s, w->w, selbeg, selend);
 		if (!d->link.nex)
 			break;
 	}
@@ -558,6 +605,16 @@ drop:
 }
 
 void
+initcmdbuf(void)
+{
+	Line *l = ecalloc(1, sizeof(*l));
+	estr_from_cstr(&l->s, "");
+	list_init(&cmdbuf.lines);
+	list_insert(&cmdbuf.lines, cmdbuf.lines.end, &l->link);
+	cmdbuf.nline = 1;
+}
+
+void
 insert(const Arg *arg)
 {
 	Edit e = {0};
@@ -668,13 +725,24 @@ mode(const Arg *arg)
 	int omode = cmode;
 	cmode = arg->i;
 	switch (cmode) {
+	case ModeC:
+		ctab->ow = cwin;
+		cwin = &cmdline;
+		estr_clean(&cmdline.l->s);
+		break;
 	case ModeV:
 		mark(&ARG(.i = '\''));
 		selected = 1;
 		break;
 	default:
-		if (omode == ModeV)
+		switch (omode) {
+		case ModeC:
+			cwin = ctab->ow;
+			break;
+		case ModeV:
 			selected = 0;
+			break;
+		}
 		break;
 	}
 }
@@ -702,7 +770,9 @@ newtab(const Arg *arg)
 	ctab = &darr_last(&tabs);
 	memset(ctab, 0, sizeof(*ctab));
 	cwin = &ctab->main;
+	cwin->x = cwin->y = 0;
 	cwin->h = scrh - 1;
+	cwin->w = scrw;
 
 	if (!arg || !arg->s)
 		return;
@@ -839,6 +909,14 @@ main(int argc, char *argv[])
 	newtab(&ARG(.s = entry));
 
 	str_empty(&barbuf);
+
+	initcmdbuf();
+	cmdline.b = &cmdbuf;
+	cmdline.l = lineof(cmdbuf.lines.beg);
+	cmdline.x = 0;
+	cmdline.y = scrh;
+	cmdline.h = 1;
+	cmdline.w = scrw;
 
 	sctui_open_alt_screen();
 

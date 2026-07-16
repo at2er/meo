@@ -6,13 +6,16 @@ static const char *tabrender = "        ";
 
 static const char *modestr[] = {
 	[ModeN] = "-",
+	[ModeC] = "",
 	[ModeI] = "I",
 	[ModeV] = "V",
 	NULL
 };
 
 #define KBS  127
+#define KCR  13
 #define KESC 27
+#define KLF  10
 
 static const struct key keys_n[] = {
 	{ { 'h'       }, moveright,      {.i = -1}     },
@@ -23,45 +26,61 @@ static const struct key keys_n[] = {
 	{ { 'm'       }, mark,           {0}           },
 	{ { 'q'       }, cmd,            {.s = "quit"} },
 	{ { 'v'       }, mode,           {.i = ModeV}  },
+	{ { ':'       }, mode,           {.i = ModeC}  },
 	{ { '\''      }, gotomark,       {0}           },
 	{ { CTRL('c') }, cmd,            {.s = "quit"} },
-	{ {  0        }, NULL,           {0}           }
+	{ { 0         }, NULL,           {0}           }
+};
+
+static const struct key keys_c[] = {
+	{ { CTRL('b') }, moveright,      {.i = -1}     },
+	{ { CTRL('c') }, mode,           {.i = ModeN}  },
+	{ { CTRL('f') }, moveright,      {.i =  1}     },
+	{ { CTRL('h') }, backspace,      {0}           },
+	{ { KBS       }, backspace,      {0}           },
+	/* Maybe you need to use KCR */
+	{ { KLF       }, cmd,            {0}           },
+	{ { KESC      }, mode,           {.i = ModeN}  },
+	{ { 0         }, NULL,           {0}           }
 };
 
 static const struct key keys_i[] = {
-	{ { 'j', 'k'  }, mode,      {.i = ModeN}  },
-	{ { CTRL('b') }, moveright, {.i = -1}     },
-	{ { CTRL('c') }, mode,      {.i = ModeN}  },
-	{ { CTRL('f') }, moveright, {.i =  1}     },
-	{ { CTRL('h') }, backspace, {0}           },
-	{ { CTRL('n') }, movedown,  {.i =  1}     },
-	{ { CTRL('p') }, movedown,  {.i = -1}     },
-	{ { KBS       }, backspace, {0}           },
-	{ { KESC      }, mode,      {.i = ModeN}  },
-	{ { 0         }, NULL,      {0}           }
+	{ { 'j', 'k'  }, mode,           {.i = ModeN}  },
+	{ { CTRL('b') }, moveright,      {.i = -1}     },
+	{ { CTRL('c') }, mode,           {.i = ModeN}  },
+	{ { CTRL('f') }, moveright,      {.i =  1}     },
+	{ { CTRL('h') }, backspace,      {0}           },
+	{ { CTRL('n') }, movedown,       {.i =  1}     },
+	{ { CTRL('p') }, movedown,       {.i = -1}     },
+	{ { KBS       }, backspace,      {0}           },
+	{ { KESC      }, mode,           {.i = ModeN}  },
+	{ { 0         }, NULL,           {0}           }
 };
 
 static const struct key keys_v[] = {
-	{ { 'h'       }, moveright, {.i = -1}     },
-	{ { 'j'       }, movedown,  {.i =  1}     },
-	{ { 'k'       }, movedown,  {.i = -1}     },
-	{ { 'l'       }, moveright, {.i =  1}     },
-	{ { CTRL('c') }, mode,      {.i = ModeN}  },
-	{ { KESC      }, mode,      {.i = ModeN}  },
-	{ { 0         }, NULL, {0}                }
+	{ { 'h'       }, moveright,      {.i = -1}     },
+	{ { 'j'       }, movedown,       {.i =  1}     },
+	{ { 'k'       }, movedown,       {.i = -1}     },
+	{ { 'l'       }, moveright,      {.i =  1}     },
+	{ { CTRL('c') }, mode,           {.i = ModeN}  },
+	{ { KESC      }, mode,           {.i = ModeN}  },
+	{ { 0         }, NULL,           {0}           }
 };
 
 static const struct key *keys[] = {
 	[ModeN] = keys_n,
+	[ModeC] = keys_c,
 	[ModeI] = keys_i,
 	[ModeV] = keys_v,
 	NULL
 };
 
 static const Cmd cmds[] = {
-	{ "e",    cmdedit },
-	{ "edit", cmdedit },
-	{ "q",    cmdquit },
-	{ "quit", cmdquit },
-	{ NULL,   NULL    },
+	{ "e",     cmdedit  },
+	{ "edit",  cmdedit  },
+	{ "q",     cmdquit  },
+	{ "quit",  cmdquit  },
+	{ "w",     cmdwrite },
+	{ "write", cmdwrite },
+	{ NULL,    NULL     },
 };
