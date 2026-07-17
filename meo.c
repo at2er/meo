@@ -54,8 +54,9 @@ typedef struct Pos {
 	unsigned int row, col;
 } Pos;
 typedef struct Edit {
-	Pos beg, end;
+	Pos beg, end, cursor;
 	struct str replace;
+	unsigned int setcursor:1;
 } Edit;
 
 typedef struct Line {
@@ -133,6 +134,7 @@ static const Cmd *matchcmd(const char *name);
 static void mode(const Arg *arg);
 static void movedown(const Arg *arg);
 static void moveright(const Arg *arg);
+static void newline(const Arg *arg);
 static void newtab(const Arg *arg);
 static void pollev(void);
 static int pollkey(void);
@@ -394,13 +396,12 @@ Edit *
 edit(const Edit *e)
 {
 	Pos _beg = e->beg, _end = e->end, *beg = &_beg, *end = &_end;
-	unsigned int orow = cwin->row;
 
 	swappos(&beg, &end);
 
+	cwin->l = getln(cwin->l, cwin->row, e->beg.row);
 	cwin->col = e->beg.col;
 	cwin->row = e->beg.row;
-	cwin->l = getln(cwin->l, orow, cwin->row);
 
 	if (e->beg.row == e->end.row)
 		eremove(beg->col, end->col);
@@ -409,6 +410,12 @@ edit(const Edit *e)
 
 	if (e->replace.s)
 		einsert(&e->replace);
+
+	if (e->setcursor) {
+		cwin->l = getln(cwin->l, cwin->row, e->cursor.row);
+		cwin->row = e->cursor.row;
+		cwin->col = e->cursor.col;
+	}
 
 	return NULL;
 }
@@ -761,6 +768,24 @@ moveright(const Arg *arg)
 	if (cwin->col == 0 && arg->i < 0)
 		return;
 	setcol(cwin->col + arg->i);
+}
+
+void
+newline(const Arg *arg)
+{
+	Edit e = {0};
+	e.beg.row = cwin->row;
+	if (arg->i < 0) {
+		e.beg.col = 0;
+		e.cursor = e.beg;
+		e.setcursor = 1;
+	} else {
+		e.beg.col = ustrlen(cwin->l->s.s) + 1;
+	}
+	e.end = e.beg;
+	estr_from_cstr(&e.replace, "\n");
+	edit(&e);
+	str_free(&e.replace);
 }
 
 void
