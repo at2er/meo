@@ -21,8 +21,6 @@
 
 typedef union arg Arg;
 
-#define UCHR_RENDER_MAX 256
-
 #define scrw global_sctui.w
 #define scrh global_sctui.h
 #define ARG(...) (const Arg){__VA_ARGS__}
@@ -108,6 +106,7 @@ static void cmdedit(int argc, const char *argv[]);
 static void cmdquit(int argc, const char *argv[]);
 static void cmdwrite(int argc, const char *argv[]);
 static unsigned int coltobcol(Line *l, unsigned int col);
+static void delete(const Arg *arg);
 static void draw(void);
 static void drawbar(void);
 static void drawcmdline(void);
@@ -152,7 +151,7 @@ static Tab *ctab;
 static int running;
 static int selected;
 static pfds_t pfds;
-static char sbuf[BUFSIZ], rbuf[UCHR_RENDER_MAX];
+static char sbuf[BUFSIZ], rbuf[BUFSIZ];
 static struct str barbuf;
 static tabs_t tabs;
 
@@ -293,6 +292,22 @@ coltobcol(Line *l, unsigned int col)
 }
 
 void
+delete(const Arg *arg)
+{
+	Edit e = {0};
+	e.beg.col = cwin->col;
+	e.beg.row = cwin->row;
+	if (cmode == ModeV) {
+		e.end.row = SELMARK.p.row;
+		e.end.col = SELMARK.p.col;
+	} else {
+		e.end = e.beg;
+		e.end.col++;
+	}
+	edit(&e);
+}
+
+void
 draw(void)
 {
 	if (cmode == ModeC)
@@ -390,6 +405,12 @@ drawwin(Win *w)
 		if (!d->link.nex)
 			break;
 	}
+
+	sctui_fill_space(rbuf, 0, w->w);
+	for (nl++; nl < w->h; nl++) {
+		sctui_move(w->x, w->y + nl);
+		sctui_out(rbuf, 0);
+	}
 }
 
 Edit *
@@ -399,11 +420,11 @@ edit(const Edit *e)
 
 	swappos(&beg, &end);
 
-	cwin->l = getln(cwin->l, cwin->row, e->beg.row);
-	cwin->col = e->beg.col;
-	cwin->row = e->beg.row;
+	cwin->l = getln(cwin->l, cwin->row, beg->row);
+	cwin->col = beg->col;
+	cwin->row = beg->row;
 
-	if (e->beg.row == e->end.row)
+	if (beg->row == end->row)
 		eremove(beg->col, end->col);
 	else
 		eremovem(beg, end);
@@ -416,6 +437,9 @@ edit(const Edit *e)
 		cwin->row = e->cursor.row;
 		cwin->col = e->cursor.col;
 	}
+
+	if (cmode == ModeV)
+		mode(&ARG(.i = ModeN));
 
 	return NULL;
 }
@@ -461,9 +485,21 @@ enewline(Buf *b, Line *at)
 void
 eremove(unsigned int beg, unsigned int end)
 {
-	unsigned int bbeg = coltobcol(cwin->l, beg),
-	             bend = coltobcol(cwin->l, end);
-	estr_remove(&cwin->l->s, bbeg, bend - bbeg);
+	unsigned int bbeg, bend;
+	Pos fbeg, fend; /* fake */
+	Line *l = cwin->l;
+
+	if (end > ustrlen(l->s.s)) {
+		fbeg.row = cwin->row;
+		fbeg.col = cwin->col;
+		fend.row = fbeg.row + 1;
+		fend.col = 0;
+		eremovem(&fbeg, &fend);
+		return;
+	}
+	bbeg = coltobcol(l, beg);
+	bend = coltobcol(l, end);
+	estr_remove(&l->s, bbeg, bend - bbeg);
 }
 
 void
@@ -472,13 +508,13 @@ eremovem(Pos *beg, Pos *end)
 	unsigned int bcol = coltobcol(cwin->l, cwin->col);
 	Line *begln = cwin->l, *l, *nex;
 
-	estr_remove(&cwin->l->s, bcol, cwin->l->s.len - bcol);
+	estr_remove(&begln->s, bcol, begln->s.len - bcol);
 
-	nex = cwin->l;
-	for (unsigned int lrow = beg->row; lrow != end->row; lrow++) {
-		l = nex;
+	l = nex = lineof(begln->link.nex);
+	for (unsigned int lrow = beg->row + 1; lrow != end->row; lrow++) {
 		nex = lineof(l->link.nex);
 		removeln(cwin->b, l);
+		l = nex;
 	}
 
 	/* l == e->end.row */
@@ -830,6 +866,7 @@ removeln(Buf *b, Line *l)
 	list_remove(&b->lines, &l->link);
 	str_free(&l->s);
 	free(l);
+	b->nline--;
 }
 
 size_t

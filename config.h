@@ -18,6 +18,7 @@ static const char *modestr[] = {
 #define KLF  10
 
 static const struct key keys_n[] = {
+	{ { 'd'       }, delete,         {0}           },
 	{ { 'h'       }, moveright,      {.i = -1}     },
 	{ { 'i'       }, mode,           {.i = ModeI}  },
 	{ { 'j'       }, movedown,       {.i =  1}     },
@@ -60,6 +61,7 @@ static const struct key keys_i[] = {
 };
 
 static const struct key keys_v[] = {
+	{ { 'd'       }, delete,         {0}           },
 	{ { 'h'       }, moveright,      {.i = -1}     },
 	{ { 'j'       }, movedown,       {.i =  1}     },
 	{ { 'k'       }, movedown,       {.i = -1}     },
