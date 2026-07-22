@@ -786,8 +786,8 @@ mode(const Arg *arg)
 		estr_clean(&cmdline.l->s);
 		break;
 	case ModeV:
-		mark(&ARG(.i = '\''));
-		selected = 1;
+		if (!selected)
+			mark(&ARG(.i = '\''));
 		break;
 	default:
 		switch (omode) {
@@ -996,6 +996,9 @@ swappos(Pos **beg, Pos **end)
 void
 update(void)
 {
+	/* keep [selected] */
+	if (cmode == ModeV)
+		selected = 1;
 	setrow(&ctab->main, ctab->main.row);
 	if (ctab->bottom.h)
 		setrow(&ctab->bottom, ctab->bottom.row);
