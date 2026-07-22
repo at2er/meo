@@ -18,6 +18,7 @@ static const char *modestr[] = {
 #define KLF  10
 
 static const struct key keys_n[] = {
+	{ { 'b'       }, selword,        {.i = -1}     },
 	{ { 'd'       }, delete,         {0}           },
 	{ { 'h'       }, moveright,      {.i = -1}     },
 	{ { 'i'       }, mode,           {.i = ModeI}  },
@@ -29,6 +30,7 @@ static const struct key keys_n[] = {
 	{ { 'O'       }, newline,        {.i = -1}     },
 	{ { 'q'       }, cmd,            {.s = "quit"} },
 	{ { 'v'       }, mode,           {.i = ModeV}  },
+	{ { 'w'       }, selword,        {.i =  1}     },
 	{ { ':'       }, mode,           {.i = ModeC}  },
 	{ { '\''      }, gotomark,       {0}           },
 	{ { CTRL('c') }, cmd,            {.s = "quit"} },

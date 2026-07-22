@@ -6,7 +6,8 @@
 #include <stdint.h>
 #include <string.h>
 #include <unistd.h>
-#include <wchar.h>
+#include <wchar.h> /* shit? */
+#include <wctype.h>
 
 #include <grapheme.h>
 
@@ -28,8 +29,7 @@ typedef union arg Arg;
 #define ARGV(...) (const char *[]){__VA_ARGS__}
 
 #define grapheme_decode_iter(STR, RET, OFF, CP) \
-	for (OFF = 0; \
-			(RET = grapheme_decode_utf8((STR) + OFF, SIZE_MAX, &(CP))) > 0 \
+	for (; (RET = grapheme_decode_utf8((STR) + OFF, SIZE_MAX, &(CP))) > 0 \
 				&& (CP) != 0; \
 			OFF += RET)
 
@@ -99,6 +99,8 @@ typedef struct Undo {
 typedef darr(struct pollfd) pfds_t;
 typedef darr(Tab) tabs_t;
 
+#include "textobj.h"
+
 static void backspace(const Arg *arg);
 static int caninsert(void);
 static void cmd(const Arg *arg);
@@ -139,6 +141,8 @@ static void pollev(void);
 static int pollkey(void);
 static void removeln(Buf *b, Line *l);
 static size_t renderchr(Uchr *uc, const char *s);
+static void seltextobj(const TextObj *t);
+static void selword(const Arg *arg);
 static void setcol(unsigned int col);
 static void setrow(unsigned int row);
 static void swappos(Pos **beg, Pos **end);
@@ -793,6 +797,7 @@ mode(const Arg *arg)
 void
 movedown(const Arg *arg)
 {
+	selected = 0;
 	if (cwin->row == 0 && arg->i < 0)
 		return;
 	setrow(cwin->row + arg->i);
@@ -801,6 +806,7 @@ movedown(const Arg *arg)
 void
 moveright(const Arg *arg)
 {
+	selected = 0;
 	if (cwin->col == 0 && arg->i < 0)
 		return;
 	setcol(cwin->col + arg->i);
@@ -907,6 +913,27 @@ renderchr(Uchr *uc, const char *s)
 }
 
 void
+seltextobj(const TextObj *t)
+{
+	cwin->col = t->beg.col;
+	mark(&ARG(.i = '\''));
+	cwin->col = t->end.col;
+	selected = 1;
+}
+
+void
+selword(const Arg *arg)
+{
+	TextObj t = {0};
+	t.beg.row = cwin->row;
+	t.beg.col = cwin->col;
+	t.begln = cwin->l;
+	if (!textobj_get(&t, arg->i))
+		return;
+	seltextobj(&t);
+}
+
+void
 setcol(unsigned int col)
 {
 	cwin->col = align(col, 0, ustrlen(cwin->l->s.s));
@@ -995,3 +1022,5 @@ main(int argc, char *argv[])
 
 	return 0;
 }
+
+#include "textobj.c" /* sucks */
