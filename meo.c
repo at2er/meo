@@ -25,7 +25,8 @@ typedef union arg Arg;
 #define scrw global_sctui.w
 #define scrh global_sctui.h
 #define ARG(...) (const Arg){__VA_ARGS__}
-#define ARGCV(...) sizeof(ARGV(__VA_ARGS__)) / sizeof(ARGV(__VA_ARGS__)[0]), ARGV(__VA_ARGS__)
+#define ARGCV(...) sizeof(ARGV(__VA_ARGS__)) / sizeof(ARGV(__VA_ARGS__)[0]), \
+		ARGV(__VA_ARGS__)
 #define ARGV(...) (const char *[]){__VA_ARGS__}
 
 #define grapheme_decode_iter(STR, RET, OFF, CP) \
@@ -80,6 +81,8 @@ typedef struct Win {
 	unsigned int row, rowoff,
 	             col, coloff;
 	unsigned int x, y, h, w;
+
+	unsigned int orow, ocol;
 } Win;
 typedef struct Tab {
 	Win main, bottom;
@@ -141,11 +144,13 @@ static void pollev(void);
 static int pollkey(void);
 static void removeln(Buf *b, Line *l);
 static size_t renderchr(Uchr *uc, const char *s);
+static void selline(const Arg *arg);
 static void seltextobj(const TextObj *t);
 static void selword(const Arg *arg);
-static void setcol(unsigned int col);
-static void setrow(unsigned int row);
+static void setcol(Win *w, unsigned int col);
+static void setrow(Win *w, unsigned int row);
 static void swappos(Pos **beg, Pos **end);
+static void update(void);
 
 static Buf cmdbuf;
 static Win cmdline;
@@ -493,6 +498,9 @@ eremove(unsigned int beg, unsigned int end)
 	Pos fbeg, fend; /* fake */
 	Line *l = cwin->l;
 
+	if (beg == end)
+		return;
+
 	if (end > ustrlen(l->s.s)) {
 		fbeg.row = cwin->row;
 		fbeg.col = cwin->col;
@@ -632,7 +640,7 @@ handlekey(void)
 		if (!caninsert())
 			goto drop;
 		for (int i = 0; i < skb_ncombo; i++, buf++) {
-			if (iscntrl(skb_combo[i]) && skb_combo[i] != '\n')
+			if (iscntrl(skb_combo[i]) && !strchr("\t\n", skb_combo[i]))
 				goto drop;
 			*buf = skb_combo[i];
 		}
@@ -800,7 +808,7 @@ movedown(const Arg *arg)
 	selected = 0;
 	if (cwin->row == 0 && arg->i < 0)
 		return;
-	setrow(cwin->row + arg->i);
+	cwin->row += arg->i;
 }
 
 void
@@ -809,7 +817,7 @@ moveright(const Arg *arg)
 	selected = 0;
 	if (cwin->col == 0 && arg->i < 0)
 		return;
-	setcol(cwin->col + arg->i);
+	cwin->col += arg->i;
 }
 
 void
@@ -913,6 +921,24 @@ renderchr(Uchr *uc, const char *s)
 }
 
 void
+selline(const Arg *arg)
+{
+	switch (arg->i) {
+	case -1:
+		mark(&ARG(.i = '\''));
+		cwin->col = 0;
+		break;
+	case 0:
+		cwin->col = 0;
+	case 1:
+		mark(&ARG(.i = '\''));
+		cwin->col = ustrlen(cwin->l->s.s);
+		break;
+	}
+	selected = 1;
+}
+
+void
 seltextobj(const TextObj *t)
 {
 	cwin->col = t->beg.col;
@@ -934,26 +960,26 @@ selword(const Arg *arg)
 }
 
 void
-setcol(unsigned int col)
+setcol(Win *w, unsigned int col)
 {
-	cwin->col = align(col, 0, ustrlen(cwin->l->s.s));
-	if (cwin->col < cwin->coloff)
-		cwin->coloff = cwin->col;
-	else if (cwin->col >= cwin->coloff + scrw)
-		cwin->coloff = cwin->col - scrw + 1;
+	w->col = align(col, 0, ustrlen(w->l->s.s));
+	if (w->col < w->coloff)
+		w->coloff = w->col;
+	else if (w->col >= w->coloff + scrw)
+		w->coloff = w->col - scrw + 1;
 }
 
 void
-setrow(unsigned int row)
+setrow(Win *w, unsigned int row)
 {
-	unsigned int orow = cwin->row;
-	cwin->row = align(row, 0, cwin->b->nline - 1);
-	if (cwin->row < cwin->rowoff)
-		cwin->rowoff = cwin->row;
-	else if (cwin->row >= cwin->rowoff + cwin->h)
-		cwin->rowoff = cwin->row - cwin->h + 1;
-	cwin->l = getln(cwin->l, orow, cwin->row);
-	setcol(cwin->col);
+	w->row = align(row, 0, w->b->nline - 1);
+	if (w->row < w->rowoff)
+		w->rowoff = w->row;
+	else if (w->row >= w->rowoff + w->h)
+		w->rowoff = w->row - w->h + 1;
+	w->l = getln(w->l, w->orow, w->row);
+	setcol(w, w->col);
+	w->orow = w->row;
 }
 
 void
@@ -965,6 +991,14 @@ swappos(Pos **beg, Pos **end)
 		*beg = e;
 		*end = b;
 	}
+}
+
+void
+update(void)
+{
+	setrow(&ctab->main, ctab->main.row);
+	if (ctab->bottom.h)
+		setrow(&ctab->bottom, ctab->bottom.row);
 }
 
 int
@@ -1014,6 +1048,7 @@ main(int argc, char *argv[])
 		draw();
 		pollev();
 		handlekey();
+		update();
 	}
 
 	sctui_close_alt_screen();

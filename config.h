@@ -20,6 +20,9 @@ static const char *modestr[] = {
 static const struct key keys_n[] = {
 	{ { 'b'       }, selword,        {.i = -1}     },
 	{ { 'd'       }, delete,         {0}           },
+	{ { 's', 'b'  }, selline,        {.i = -1}     },
+	{ { 's', 'f'  }, selline,        {.i =  1}     },
+	{ { 's', 'l'  }, selline,        {.i =  0}     },
 	{ { 'h'       }, moveright,      {.i = -1}     },
 	{ { 'i'       }, mode,           {.i = ModeI}  },
 	{ { 'j'       }, movedown,       {.i =  1}     },
