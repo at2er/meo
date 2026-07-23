@@ -32,6 +32,7 @@ static const struct key keys_n[] = {
 	{ { 'o'       }, newline,        {.i =  1}     },
 	{ { 'O'       }, newline,        {.i = -1}     },
 	{ { 'q'       }, cmd,            {.s = "quit"} },
+	{ { 'u'       }, undo,           {0}           },
 	{ { 'v'       }, mode,           {.i = ModeV}  },
 	{ { 'w'       }, selword,        {.i =  1}     },
 	{ { ':'       }, mode,           {.i = ModeC}  },

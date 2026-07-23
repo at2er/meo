@@ -35,6 +35,7 @@ typedef union arg Arg;
 			OFF += RET)
 
 #define lineof(LINK) utilsh_list_container_of(LINK, Line, link)
+#define undoof(LINK) utilsh_list_container_of(LINK, Undo, link)
 
 enum { ModeN, ModeC, ModeI, ModeV };
 
@@ -82,6 +83,8 @@ typedef struct Win {
 	             col, coloff;
 	unsigned int x, y, h, w;
 
+	/* if you set these value without setrow() or else,
+	 * __please remember__ set these value to ensure update() works correctly. */
 	unsigned int orow, ocol;
 } Win;
 typedef struct Tab {
@@ -99,6 +102,7 @@ typedef struct Undo {
 	struct utilsh_list link;
 } Undo;
 
+typedef darr(Buf*) bufs_t;
 typedef darr(struct pollfd) pfds_t;
 typedef darr(Tab) tabs_t;
 
@@ -120,8 +124,8 @@ static void drawwin(Win *w);
 static Edit *edit(const Edit *e);
 static void einsert(const struct str *content);
 static Line *enewline(Buf *b, Line *at);
-static void eremove(unsigned int beg, unsigned int end);
-static void eremovem(Pos *beg, Pos *end);
+static void eremove(struct str *backup, unsigned int beg, unsigned int end);
+static void eremovem(struct str *backup, Pos *beg, Pos *end);
 static Line *freadline(FILE *fp);
 static Line *getln(Line *curl, unsigned int crow, unsigned int row);
 static Mark *getmark(int idx);
@@ -140,6 +144,7 @@ static void movedown(const Arg *arg);
 static void moveright(const Arg *arg);
 static void newline(const Arg *arg);
 static void newtab(const Arg *arg);
+static Undo *newundo(Buf *b);
 static void pollev(void);
 static int pollkey(void);
 static void removeln(Buf *b, Line *l);
@@ -150,8 +155,10 @@ static void selword(const Arg *arg);
 static void setcol(Win *w, unsigned int col);
 static void setrow(Win *w, unsigned int row);
 static void swappos(Pos **beg, Pos **end);
+static void undo(const Arg *arg);
 static void update(void);
 
+static bufs_t bufs;
 static Buf cmdbuf;
 static Win cmdline;
 static int cmode = ModeN;
@@ -251,14 +258,23 @@ cmdedit(int argc, const char *argv[])
 	FILE *fp;
 	Line *l;
 
-	if (!(fp = fopen(argv[1], "r")))
-		return;
+	strmatch(argv[1], int, i, bufs.n, bufs.e[i]->path) {
+		b = bufs.e[i];
+		goto setwin;
+	}
 
 	b = ecalloc(1, sizeof(*b));
 	strcpy(b->path, argv[1]);
 	list_init(&b->lines);
-	for (; (l = freadline(fp)); b->nline++)
+	list_init(&b->undos);
+	if ((fp = fopen(argv[1], "r"))) {
+		for (; (l = freadline(fp)); b->nline++)
+			list_insert(&b->lines, b->lines.end, &l->link);
+	} else {
+		l = ecalloc(1, sizeof(*l));
 		list_insert(&b->lines, b->lines.end, &l->link);
+	}
+setwin:
 	ctab->main.b = b;
 	ctab->main.l = lineof(b->lines.beg);
 }
@@ -422,35 +438,41 @@ drawwin(Win *w)
 	}
 }
 
+/* it returns a reverse edit operation,
+ * __Don't free() it__ */
 Edit *
 edit(const Edit *e)
 {
+	Undo *u = newundo(cwin->b);
 	Pos _beg = e->beg, _end = e->end, *beg = &_beg, *end = &_end;
 
 	swappos(&beg, &end);
 
-	cwin->l = getln(cwin->l, cwin->row, beg->row);
-	cwin->col = beg->col;
+	setrow(cwin, beg->row);
 	cwin->row = beg->row;
+	cwin->col = beg->col;
 
+	u->e.beg = u->e.end = *beg;
 	if (beg->row == end->row)
-		eremove(beg->col, end->col);
+		eremove(&u->e.replace, beg->col, end->col);
 	else
-		eremovem(beg, end);
+		eremovem(&u->e.replace, beg, end);
 
-	if (e->replace.s)
+	if (e->replace.s) {
 		einsert(&e->replace);
+		u->e.end.row = cwin->row;
+		u->e.end.col = cwin->col;
+	}
 
 	if (e->setcursor) {
-		cwin->l = getln(cwin->l, cwin->row, e->cursor.row);
-		cwin->row = e->cursor.row;
+		setrow(cwin, e->cursor.row);
 		cwin->col = e->cursor.col;
 	}
 
 	if (cmode == ModeV)
 		mode(&ARG(.i = ModeN));
 
-	return NULL;
+	return &u->e;
 }
 
 void
@@ -465,7 +487,7 @@ einsert(const struct str *content)
 
 	while ((s = iterstr(&tmp, s))) {
 		if (tmp.len == 1 && tmp.s[0] == '\n') {
-			cwin->row++;
+			cwin->orow = ++cwin->row;
 			cwin->col = 0;
 			cwin->l = enewline(cwin->b, cwin->l);
 		} else {
@@ -492,7 +514,7 @@ enewline(Buf *b, Line *at)
 }
 
 void
-eremove(unsigned int beg, unsigned int end)
+eremove(struct str *backup, unsigned int beg, unsigned int end)
 {
 	unsigned int bbeg, bend;
 	Pos fbeg, fend; /* fake */
@@ -506,25 +528,35 @@ eremove(unsigned int beg, unsigned int end)
 		fbeg.col = cwin->col;
 		fend.row = fbeg.row + 1;
 		fend.col = 0;
-		eremovem(&fbeg, &fend);
+		eremovem(backup, &fbeg, &fend);
 		return;
 	}
 	bbeg = coltobcol(l, beg);
 	bend = coltobcol(l, end);
+	if (backup)
+		estr_from_str(backup, &STR(l->s.s + bbeg, bend - bbeg));
 	estr_remove(&l->s, bbeg, bend - bbeg);
 }
 
 void
-eremovem(Pos *beg, Pos *end)
+eremovem(struct str *backup, Pos *beg, Pos *end)
 {
 	unsigned int bcol = coltobcol(cwin->l, cwin->col);
 	Line *begln = cwin->l, *l, *nex;
 
+	if (backup) {
+		estr_from_str(backup, &STR(begln->s.s + bcol, begln->s.len - bcol));
+		estr_append_chr(backup, '\n');
+	}
 	estr_remove(&begln->s, bcol, begln->s.len - bcol);
 
 	l = nex = lineof(begln->link.nex);
 	for (unsigned int lrow = beg->row + 1; lrow != end->row; lrow++) {
 		nex = lineof(l->link.nex);
+		if (backup) {
+			estr_append_str(backup, &l->s);
+			estr_append_chr(backup, '\n');
+		}
 		removeln(cwin->b, l);
 		l = nex;
 	}
@@ -533,6 +565,8 @@ eremovem(Pos *beg, Pos *end)
 	bcol = coltobcol(l, end->col);
 	if (bcol < l->s.len)
 		estr_append_cstr(&begln->s, l->s.s + bcol);
+	if (backup)
+		estr_append_str(backup, &STR(l->s.s, bcol));
 	removeln(cwin->b, l);
 }
 
@@ -855,6 +889,24 @@ newtab(const Arg *arg)
 	cmdedit(ARGCV("e", arg->s));
 }
 
+Undo *
+newundo(Buf *b)
+{
+	Undo *u;
+
+	if (b->undos.end) {
+		if (b->undos.end->nex)
+			return undoof(b->undos.end->nex);
+	} else {
+		if (b->undos.beg)
+			return undoof(b->undos.beg);
+	}
+
+	u = ecalloc(1, sizeof(*u));
+	list_insert(&b->undos, b->undos.end, &u->link);
+	return u;
+}
+
 void
 pollev(void)
 {
@@ -991,6 +1043,21 @@ swappos(Pos **beg, Pos **end)
 		*beg = e;
 		*end = b;
 	}
+}
+
+void
+undo(const Arg *arg)
+{
+	struct utilsh_list_head *undos = &cwin->b->undos;
+	Undo *u;
+
+	if (!undos->end)
+		return;
+
+	u = undoof(undos->end);
+	undos->end = u->link.prv;
+	edit(&u->e);
+	undos->end = u->link.prv;
 }
 
 void
