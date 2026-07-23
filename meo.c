@@ -147,6 +147,7 @@ static void newtab(const Arg *arg);
 static Undo *newundo(Buf *b);
 static void pollev(void);
 static int pollkey(void);
+static void redo(const Arg *arg);
 static void removeln(Buf *b, Line *l);
 static size_t renderchr(Uchr *uc, const char *s);
 static void selline(const Arg *arg);
@@ -460,6 +461,7 @@ edit(const Edit *e)
 
 	if (e->replace.s) {
 		einsert(&e->replace);
+		str_empty(&u->e.replace);
 		u->e.end.row = cwin->row;
 		u->e.end.col = cwin->col;
 	}
@@ -895,16 +897,22 @@ newundo(Buf *b)
 	Undo *u;
 
 	if (b->undos.end) {
-		if (b->undos.end->nex)
-			return undoof(b->undos.end->nex);
+		if (b->undos.end->nex) {
+			b->undos.end = b->undos.end->nex;
+			goto set;
+		}
 	} else {
-		if (b->undos.beg)
-			return undoof(b->undos.beg);
+		if (b->undos.beg) {
+			b->undos.end = b->undos.beg;
+			goto set;
+		}
 	}
 
 	u = ecalloc(1, sizeof(*u));
 	list_insert(&b->undos, b->undos.end, &u->link);
 	return u;
+set:
+	return undoof(b->undos.end);
 }
 
 void
@@ -924,6 +932,28 @@ pollkey(void)
 	while (!keyev)
 		pollev();
 	return keyev;
+}
+
+void
+redo(const Arg *arg)
+{
+	Edit e;
+	struct utilsh_list_head *undos = &cwin->b->undos;
+	Undo *u;
+
+	if (undos->end) {
+		if (!undos->end->nex)
+			return;
+		u = undoof(undos->end->nex);
+	} else {
+		if (!undos->beg)
+			return;
+		u = undoof(undos->beg);
+	}
+
+	e = u->e;
+	edit(&e);
+	undos->end = &u->link;
 }
 
 void
@@ -1045,9 +1075,18 @@ swappos(Pos **beg, Pos **end)
 	}
 }
 
+/*
+a   [insert a]u0
+ab  [inesrt b]u0<>u1
+abc [insert c]u0<>u1<>u2
+ab  [undo    ]u0<>u1__u2
+abm [insert m]u0<>u1<>u2
+ */
 void
 undo(const Arg *arg)
 {
+	Edit e; /* a copy, we need */
+	struct utilsh_list *prv;
 	struct utilsh_list_head *undos = &cwin->b->undos;
 	Undo *u;
 
@@ -1055,9 +1094,13 @@ undo(const Arg *arg)
 		return;
 
 	u = undoof(undos->end);
-	undos->end = u->link.prv;
-	edit(&u->e);
-	undos->end = u->link.prv;
+	undos->end = prv = u->link.prv;
+
+	/* [u->e] will be used by newundo() in edit(), so just copy it */
+	e = u->e;
+	edit(&e);
+
+	undos->end = prv;
 }
 
 void
