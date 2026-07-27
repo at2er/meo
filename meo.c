@@ -271,8 +271,9 @@ cmd(const Arg *arg)
 
 	darr_init(&args);
 
-	for (tok = dup; strtok_r(tok, " \r\n", &saver); tok = NULL)
+	for (tok = dup; (tok = strtok_r(tok, " \r\t\n", &saver)); tok = NULL)
 		darr_append(&args, tok);
+
 	darr_append(&args, NULL);
 	args.n--;
 
@@ -308,9 +309,13 @@ cmdedit(int argc, const char *argv[])
 		l = ecalloc(1, sizeof(*l));
 		list_insert(&b->lines, b->lines.end, &l->link);
 	}
+	darr_append(&bufs, b);
 setwin:
 	ctab->main.b = b;
 	ctab->main.l = lineof(b->lines.beg);
+	ctab->main.row = ctab->main.orow = 0;
+	ctab->main.rowoff = ctab->main.coloff = 0;
+	ctab->main.col = ctab->main.ocol = 0;
 }
 
 void
