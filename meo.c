@@ -1,5 +1,6 @@
 #include <ctype.h>
 #include <errno.h>
+#include <limits.h>
 #include <locale.h>
 #include <poll.h>
 #include <regex.h>
@@ -122,6 +123,7 @@ static void drawbar(void);
 static void drawcmdline(void);
 static void drawline(struct str *s, unsigned int x, int selbeg, int selend);
 static void drawwin(Win *w);
+static void duptoreg(int idx, struct str *s);
 static Edit *edit(const Edit *e);
 static void einsert(const struct str *content);
 static Line *enewline(Buf *b, Line *at);
@@ -129,8 +131,8 @@ static void eremove(struct str *backup, unsigned int beg, unsigned int end);
 static void eremovem(struct str *backup, Pos *beg, Pos *end);
 static Line *freadline(FILE *fp);
 static Line *getln(Line *curl, unsigned int crow, unsigned int row);
-static Mark *getmark(int idx);
 static unsigned int getrx(Line *l, unsigned int col);
+static void gotoinline(const Arg *arg);
 static void gotomark(const Arg *arg);
 static void handlekey(void);
 static void initcmdbuf(void);
@@ -147,6 +149,7 @@ static void newline(const Arg *arg);
 static void newtab(const Arg *arg);
 static Undo *newundo(Buf *b);
 static void nexmatch(const Arg *arg);
+static void paste(const Arg *arg);
 static void pollev(void);
 static int pollkey(void);
 static void redo(const Arg *arg);
@@ -154,13 +157,13 @@ static void removeln(Buf *b, Line *l);
 static size_t renderchr(Uchr *uc, const char *s);
 static void search(const Arg *arg);
 static void sel(Pos *beg, Pos *end);
-static void selline(const Arg *arg);
 static void selword(const Arg *arg);
 static void setcol(Win *w, unsigned int col);
 static void setrow(Win *w, unsigned int row);
 static void swappos(Pos **beg, Pos **end);
 static void undo(const Arg *arg);
 static void update(void);
+static void yank(const Arg *arg);
 
 static struct str barbuf;
 static bufs_t bufs;
@@ -182,11 +185,16 @@ static tabs_t tabs;
 /* events */
 static int keyev;
 
-/* numbers + lowers + '\'' + '"'
- * '\'': explicit selection by user
+/* '\'': explicit selection by user
  * '"':  implicit selection like some jumping actions */
-static Mark marks[10 + 26 + 2];
-#define SELMARK marks[10 + 26]
+static Mark marks[UCHAR_MAX];
+#define SELMARK marks['\'']
+
+/* '"': clipboard
+ * '.': last action */
+static char *regs[UCHAR_MAX];
+#define CLIPREG regs['"']
+#define DOTREG  regs['.']
 
 static struct option opts[] = {
 	OPT_END
@@ -340,8 +348,7 @@ delete(const Arg *arg)
 	e.beg.col = cwin->col;
 	e.beg.row = cwin->row;
 	if (cmode == ModeV) {
-		e.end.row = SELMARK.p.row;
-		e.end.col = SELMARK.p.col;
+		e.end = SELMARK.p;
 	} else {
 		e.end = e.beg;
 		e.end.col++;
@@ -453,6 +460,15 @@ drawwin(Win *w)
 		sctui_move(w->x, w->y + nl);
 		sctui_out(rbuf, 0);
 	}
+}
+
+void
+duptoreg(int idx, struct str *s)
+{
+	char **reg = &regs[idx];
+	if (*reg)
+		free(*reg);
+	*reg = s->s;
 }
 
 /* it returns a reverse edit operation,
@@ -625,22 +641,6 @@ getln(Line *curl, unsigned int crow, unsigned int row)
 	return lineof(link);
 }
 
-Mark *
-getmark(int idx)
-{
-	if (isdigit(idx)) {
-		idx -= '0';
-	} else if (islower(idx)) {
-		idx = idx - 'a' + 10;
-	} else if (idx == '\'') {
-		idx = &SELMARK - marks;
-	} else {
-		return NULL;
-	}
-	return &marks[idx];
-
-}
-
 unsigned int
 getrx(Line *l, unsigned int col)
 {
@@ -661,6 +661,24 @@ getrx(Line *l, unsigned int col)
 }
 
 void
+gotoinline(const Arg *arg)
+{
+	switch (arg->i) {
+	case -1:
+		mark(&ARG(.i = '\''));
+		cwin->col = 0;
+		break;
+	case 0:
+		cwin->col = 0;
+	case 1:
+		mark(&ARG(.i = '\''));
+		cwin->col = ustrlen(cwin->l->s.s);
+		break;
+	}
+	selected = 1;
+}
+
+void
 gotomark(const Arg *arg)
 {
 	unsigned int orow = cwin->row;
@@ -668,8 +686,7 @@ gotomark(const Arg *arg)
 	Mark *m;
 	if (k == 0)
 		k = pollkey();
-	if (!(m = getmark(k)))
-		return;
+	m = &marks[k];
 	if (!m->b)
 		return;
 	cwin->b = m->b;
@@ -758,6 +775,8 @@ iterln(LineIter *li)
 		li->lstart = li->beg.col;
 		li->lend = ustrlen(li->l->s.s) + 1;
 	} else if (li->lrow == li->end.row) {
+		if (li->end.col == 0)
+			return NULL;
 		li->lstart = 0;
 		li->lend = li->end.col;
 		goto end;
@@ -796,7 +815,7 @@ makelniter(LineIter *li, Pos *beg, Pos *end)
 	li->beg = *beg;
 	li->end = *end;
 
-	//li->l = li->nex = getln(refln, refrow, li->beg->row);
+	li->l = li->nex = getln(cwin->l, cwin->row, li->beg.row);
 	li->lrow = li->beg.row;
 }
 
@@ -807,8 +826,7 @@ mark(const Arg *arg)
 	Mark *m;
 	if (k == 0)
 		k = pollkey();
-	if (!(m = getmark(k)))
-		return;
+	m = &marks[k];
 	m->b = cwin->b;
 	m->p.row = cwin->row;
 	m->p.col = cwin->col;
@@ -971,6 +989,25 @@ matched:
 }
 
 void
+paste(const Arg *arg)
+{
+	Edit e = {0};
+	char *str = regs[arg->i];
+
+	if (cmode != ModeV) {
+		insert(&ARG(.s = str));
+		return;
+	}
+
+	e.beg.row = cwin->row;
+	e.beg.col = cwin->col;
+	e.end = SELMARK.p;
+	e.replace.s = str;
+	e.replace.len = strlen(str);
+	edit(&e);
+}
+
+void
 pollev(void)
 {
 	keyev = 0;
@@ -1094,24 +1131,6 @@ sel(Pos *beg, Pos *end)
 }
 
 void
-selline(const Arg *arg)
-{
-	switch (arg->i) {
-	case -1:
-		mark(&ARG(.i = '\''));
-		cwin->col = 0;
-		break;
-	case 0:
-		cwin->col = 0;
-	case 1:
-		mark(&ARG(.i = '\''));
-		cwin->col = ustrlen(cwin->l->s.s);
-		break;
-	}
-	selected = 1;
-}
-
-void
 selword(const Arg *arg)
 {
 	TextObj t = {0};
@@ -1187,6 +1206,36 @@ update(void)
 	setrow(&ctab->main, ctab->main.row);
 	if (ctab->bottom.h)
 		setrow(&ctab->bottom, ctab->bottom.row);
+}
+
+void
+yank(const Arg *arg)
+{
+	Pos beg, end;
+	LineIter iter;
+	unsigned int lstart, lend;
+	struct str tmp;
+
+	if (!selected || cwin->b != SELMARK.b)
+		return;
+
+	str_empty(&tmp);
+
+	beg = SELMARK.p;
+	end.row = cwin->row;
+	end.col = cwin->col;
+	makelniter(&iter, &beg, &end);
+	while (iterln(&iter)) {
+		lstart = coltobcol(iter.l, iter.lstart);
+		lend = coltobcol(iter.l, iter.lend);
+		estr_append_str(&tmp, &STR(iter.l->s.s + lstart, lend - lstart));
+		if (beg.row == end.row)
+			break;
+		if (lend >= iter.l->s.len)
+			estr_append_chr(&tmp, '\n');
+	}
+
+	duptoreg(arg->i, &tmp);
 }
 
 int
