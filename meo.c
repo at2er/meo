@@ -745,11 +745,10 @@ insert(const Arg *arg)
 	e.beg.row = cwin->row;
 	e.beg.col = cwin->col;
 	e.end = e.beg;
-	estr_from_cstr(&e.replace, arg->s);
+	e.replace.s = (char *)arg->s;
+	e.replace.len = strlen(arg->s);
 
 	edit(&e);
-
-	str_free(&e.replace);
 }
 
 Line *
