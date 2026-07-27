@@ -2,6 +2,7 @@
 #include <errno.h>
 #include <locale.h>
 #include <poll.h>
+#include <regex.h>
 #include <stdio.h>
 #include <stdint.h>
 #include <string.h>
@@ -37,7 +38,7 @@ typedef union arg Arg;
 #define lineof(LINK) utilsh_list_container_of(LINK, Line, link)
 #define undoof(LINK) utilsh_list_container_of(LINK, Undo, link)
 
-enum { ModeN, ModeC, ModeI, ModeV };
+enum { ModeN, ModeC, ModeF, ModeI, ModeV };
 
 typedef struct Buf {
 	struct utilsh_list_head lines, undos;
@@ -145,13 +146,15 @@ static void moveright(const Arg *arg);
 static void newline(const Arg *arg);
 static void newtab(const Arg *arg);
 static Undo *newundo(Buf *b);
+static void nexmatch(const Arg *arg);
 static void pollev(void);
 static int pollkey(void);
 static void redo(const Arg *arg);
 static void removeln(Buf *b, Line *l);
 static size_t renderchr(Uchr *uc, const char *s);
+static void search(const Arg *arg);
+static void sel(Pos *beg, Pos *end);
 static void selline(const Arg *arg);
-static void seltextobj(const TextObj *t);
 static void selword(const Arg *arg);
 static void setcol(Win *w, unsigned int col);
 static void setrow(Win *w, unsigned int row);
@@ -159,17 +162,21 @@ static void swappos(Pos **beg, Pos **end);
 static void undo(const Arg *arg);
 static void update(void);
 
+static struct str barbuf;
 static bufs_t bufs;
 static Buf cmdbuf;
 static Win cmdline;
 static int cmode = ModeN;
 static Tab *ctab;
 #define cwin (ctab->w)
+static const char *matched;
+static regmatch_t matches[1];
+static regex_t pattern;
+static int patterncomped;
+static pfds_t pfds;
 static int running;
 static int selected;
-static pfds_t pfds;
 static char sbuf[BUFSIZ], rbuf[BUFSIZ];
-static struct str barbuf;
 static tabs_t tabs;
 
 /* events */
@@ -205,11 +212,20 @@ backspace(const Arg *arg)
 	edit(&e);
 }
 
+unsigned int
+bcoltocol(Line *l, unsigned int bcol)
+{
+	unsigned int col = 0;
+	for (unsigned int off = 0; off < bcol && l->s.s[off]; col++)
+		off += grapheme_next_character_break_utf8(l->s.s + off, SIZE_MAX);
+	return col;
+}
+
 int
 caninsert(void)
 {
 	switch (cmode) {
-	case ModeC: case ModeI:
+	case ModeC: case ModeF: case ModeI:
 		return 1;
 	default:
 		return 0;
@@ -336,7 +352,7 @@ delete(const Arg *arg)
 void
 draw(void)
 {
-	if (cmode == ModeC)
+	if (cmode == ModeC || cmode == ModeF)
 		drawcmdline();
 	else
 		drawbar();
@@ -816,7 +832,7 @@ mode(const Arg *arg)
 	int omode = cmode;
 	cmode = arg->i;
 	switch (cmode) {
-	case ModeC:
+	case ModeC: case ModeF:
 		ctab->ow = cwin;
 		cwin = &cmdline;
 		estr_clean(&cmdline.l->s);
@@ -827,7 +843,7 @@ mode(const Arg *arg)
 		break;
 	default:
 		switch (omode) {
-		case ModeC:
+		case ModeC: case ModeF:
 			cwin = ctab->ow;
 			break;
 		case ModeV:
@@ -845,6 +861,8 @@ movedown(const Arg *arg)
 	if (cwin->row == 0 && arg->i < 0)
 		return;
 	cwin->row += arg->i;
+	if (cwin->row >= cwin->b->nline)
+		cwin->row = cwin->b->nline - 1;
 }
 
 void
@@ -913,6 +931,43 @@ newundo(Buf *b)
 	return u;
 set:
 	return undoof(b->undos.end);
+}
+
+void
+nexmatch(const Arg *arg)
+{
+	Pos beg, end;
+	unsigned int off = 0, orow = cwin->row;
+	Line *oln = cwin->l;
+
+	if (!patterncomped)
+		return;
+
+	if (!(matched && RANGE(matched, cwin->l->s.s, cwin->l->s.s + cwin->l->s.len)))
+		matched = cwin->l->s.s;
+	while (1) { 
+		if (!regexec(&pattern, matched, 1, matches, 0))
+			goto matched;
+		movedown(&ARG(.i = arg->i));
+		if (cwin->orow == cwin->row)
+			break;
+		cwin->l = getln(cwin->l, cwin->orow, cwin->row);
+		cwin->orow = cwin->row;
+		matched = cwin->l->s.s;
+	}
+
+	matched = NULL;
+	cwin->row = cwin->orow = orow;
+	cwin->l = oln;
+	return;
+matched:
+	beg.row = end.row = cwin->row;
+	if (matched != cwin->l->s.s)
+		off = matched - cwin->l->s.s;
+	beg.col = bcoltocol(cwin->l, matches[0].rm_so + off);
+	end.col = bcoltocol(cwin->l, matches[0].rm_eo + off);
+	sel(&beg, &end);
+	matched = cwin->l->s.s + matches[0].rm_eo + off;
 }
 
 void
@@ -1002,6 +1057,42 @@ renderchr(Uchr *uc, const char *s)
 	return ret;
 }
 
+/* I don't know why call it "search" but the mode is "find" */
+void
+search(const Arg *arg)
+{
+	char *dup = NULL;
+	int ret;
+
+	if (arg->s)
+		dup = strdup(arg->s);
+	if (cmode == ModeF) {
+		mode(&ARG(.i = ModeN));
+		if (!cmdline.l->s.s[0])
+			return;
+		if (!dup)
+			dup = strdup(cmdline.l->s.s);
+	}
+
+	patterncomped = 0;
+	ret = regcomp(&pattern, dup, 0);
+	free(dup);
+	if (ret)
+		return;
+	patterncomped = 1;
+}
+
+void
+sel(Pos *beg, Pos *end)
+{
+	setrow(cwin, beg->row);
+	setcol(cwin, beg->col);
+	mark(&ARG(.i = '\''));
+	setrow(cwin, end->row);
+	setcol(cwin, end->col);
+	selected = 1;
+}
+
 void
 selline(const Arg *arg)
 {
@@ -1021,15 +1112,6 @@ selline(const Arg *arg)
 }
 
 void
-seltextobj(const TextObj *t)
-{
-	cwin->col = t->beg.col;
-	mark(&ARG(.i = '\''));
-	cwin->col = t->end.col;
-	selected = 1;
-}
-
-void
 selword(const Arg *arg)
 {
 	TextObj t = {0};
@@ -1038,7 +1120,7 @@ selword(const Arg *arg)
 	t.begln = cwin->l;
 	if (!textobj_get(&t, arg->i))
 		return;
-	seltextobj(&t);
+	sel(&t.beg, &t.end);
 }
 
 void
@@ -1075,13 +1157,6 @@ swappos(Pos **beg, Pos **end)
 	}
 }
 
-/*
-a   [insert a]u0
-ab  [inesrt b]u0<>u1
-abc [insert c]u0<>u1<>u2
-ab  [undo    ]u0<>u1__u2
-abm [insert m]u0<>u1<>u2
- */
 void
 undo(const Arg *arg)
 {
