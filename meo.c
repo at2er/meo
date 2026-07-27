@@ -374,13 +374,22 @@ draw(void)
 void
 drawbar(void)
 {
+	int i;
+	size_t off, ret;
+	Uchr uc;
+
 	estr_append_cstr(&barbuf, modestr[cmode]);
 	estr_append_chr(&barbuf, ' ');
 	estr_append_cstr(&barbuf, cwin->b->path);
 	estr_append_chr(&barbuf, ' ');
 	snprintf(sbuf, BUFSIZ, "%u,%u", cwin->row + 1, cwin->col + 1);
 	estr_append_cstr(&barbuf, sbuf);
-	estr_append_chr(&barbuf, '\n');
+	estr_append_chr(&barbuf, ' ');
+	for (i = 0; i < skb_ncombo; i++)
+		sbuf[i] = (char)skb_combo[i];
+	sbuf[i] = '\0';
+	for (off = 0; (ret = renderchr(&uc, sbuf + off)) > 0; off += ret)
+		estr_append_str(&barbuf, &STR(sbuf + off, uc.blen));
 
 	sctui_out(sctui_attr_on(barattr), 0);
 	sctui_move(0, scrh);
@@ -1020,6 +1029,7 @@ int
 pollkey(void)
 {
 	keyev = 0;
+	draw();
 	while (!keyev)
 		pollev();
 	return keyev;
@@ -1062,7 +1072,7 @@ renderchr(Uchr *uc, const char *s)
 	size_t ret = grapheme_decode_utf8(s, SIZE_MAX, &uc->cp);
 	char *sb = rbuf;
 
-	if (ret == 0 || uc->cp == 0)
+	if (!ret || !uc->cp)
 		return 0;
 
 	uc->blen = ret;
@@ -1070,6 +1080,7 @@ renderchr(Uchr *uc, const char *s)
 		sb[0] = *s;
 	else
 		strncpy(sb, s, ret);
+
 	switch (uc->cp) {
 	case L'\n':
 		return 0;
