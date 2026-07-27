@@ -132,6 +132,7 @@ static void eremovem(struct str *backup, Pos *beg, Pos *end);
 static Line *freadline(FILE *fp);
 static Line *getln(Line *curl, unsigned int crow, unsigned int row);
 static unsigned int getrx(Line *l, unsigned int col);
+static void gotoinfile(const Arg *arg);
 static void gotoinline(const Arg *arg);
 static void gotomark(const Arg *arg);
 static void handlekey(void);
@@ -667,6 +668,16 @@ getrx(Line *l, unsigned int col)
 	}
 
 	return rx;
+}
+
+void
+gotoinfile(const Arg *arg)
+{
+	selected = 0;
+	if (arg->i < 0)
+		cwin->row = 0;
+	else
+		cwin->row = cwin->b->nline - 1;
 }
 
 void
