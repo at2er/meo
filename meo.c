@@ -112,6 +112,7 @@ typedef darr(Tab) tabs_t;
 
 static void backspace(const Arg *arg);
 static int caninsert(void);
+static void change(const Arg *arg);
 static void cmd(const Arg *arg);
 static void cmdedit(int argc, const char *argv[]);
 static void cmdquit(int argc, const char *argv[]);
@@ -239,6 +240,13 @@ caninsert(void)
 	default:
 		return 0;
 	}
+}
+
+void
+change(const Arg *arg)
+{
+	delete(0);
+	mode(&ARG(.i = ModeI));
 }
 
 void
