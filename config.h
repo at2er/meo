@@ -48,6 +48,8 @@ static const struct key keys_n[] = {
 	{ { '/'       }, mode,           {.i = ModeF}  },
 	{ { '\''      }, gotomark,       {0}           },
 	{ { CTRL('c') }, cmd,            {.s = "quit"} },
+	{ { CTRL('u') }, movedown,       {.i = -10}    },
+	{ { CTRL('d') }, movedown,       {.i =  10}    },
 };
 
 static const struct key keys_c[] = {

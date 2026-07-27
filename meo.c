@@ -895,9 +895,10 @@ void
 movedown(const Arg *arg)
 {
 	selected = 0;
-	if (cwin->row == 0 && arg->i < 0)
-		return;
-	cwin->row += arg->i;
+	if (arg->i < 0 && cwin->row < (unsigned int)-arg->i)
+		cwin->row = 0;
+	else
+		cwin->row += arg->i;
 	if (cwin->row >= cwin->b->nline)
 		cwin->row = cwin->b->nline - 1;
 }
