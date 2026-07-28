@@ -32,6 +32,11 @@ typedef union arg Arg;
 #define ARGCV(...) sizeof(ARGV(__VA_ARGS__)) / sizeof(ARGV(__VA_ARGS__)[0]), \
 		ARGV(__VA_ARGS__)
 #define ARGV(...) (const char *[]){__VA_ARGS__}
+#define LISTEN_SIG(SIG, FLAGS, HANDLER) \
+		sigaction(SIG, &(struct sigaction){ \
+			.sa_flags = FLAGS, \
+			.sa_handler = HANDLER \
+		}, NULL)
 
 #define grapheme_decode_iter(STR, RET, OFF, CP) \
 	for (; (RET = grapheme_decode_utf8((STR) + OFF, SIZE_MAX, &(CP))) > 0 \
@@ -164,14 +169,17 @@ static int pollkey(void);
 static void redo(const Arg *arg);
 static void removeln(Buf *b, Line *l);
 static size_t renderchr(Uchr *uc, const char *s);
+static void resize(int sig);
 static void search(const Arg *arg);
 static void sel(Pos *beg, Pos *end);
 static void selword(const Arg *arg);
 static void setcol(Win *w, unsigned int col);
 static void setrow(Win *w, unsigned int row);
+static void suspend(const Arg *arg);
 static void swappos(Pos **beg, Pos **end);
 static void undo(const Arg *arg);
-static void update(void);
+static void update(Tab *t);
+static void updatewins(Tab *t);
 static void yank(const Arg *arg);
 
 static struct str barbuf;
@@ -1225,6 +1233,16 @@ renderchr(Uchr *uc, const char *s)
 	return ret;
 }
 
+void
+resize(int sig)
+{
+	sctui_update();
+	cmdline.y = scrh;
+	cmdline.w = scrw;
+	for (int i = 0; i < tabs.n; i++)
+		updatewins(&tabs.e[i]);
+}
+
 /* I don't know why call it "search" but the mode is "find" */
 void
 search(const Arg *arg)
@@ -1298,6 +1316,19 @@ setrow(Win *w, unsigned int row)
 }
 
 void
+suspend(const Arg *arg)
+{
+	sctui_fini();
+	sctui_close_alt_screen();
+	sctui_commit();
+	kill(0, SIGSTOP);
+	sctui_init();
+	sctui_open_alt_screen();
+	resize(0);
+	sctui_commit();
+}
+
+void
 swappos(Pos **beg, Pos **end)
 {
 	Pos *b = *beg, *e = *end;
@@ -1330,14 +1361,23 @@ undo(const Arg *arg)
 }
 
 void
-update(void)
+update(Tab *t)
 {
-	/* keep [selected] */
-	if (cmode == ModeV)
-		selected = 1;
-	setrow(&ctab->main, ctab->main.row);
-	if (ctab->bottom.h)
-		setrow(&ctab->bottom, ctab->bottom.row);
+	if (t->bottom.h)
+		setrow(&t->bottom, t->bottom.row);
+	setrow(&t->main, t->main.row);
+}
+
+void
+updatewins(Tab *t)
+{
+	t->main.w = t->bottom.w = scrw;
+	t->main.h = scrh - 1;
+	if (t->bottom.h) {
+		t->bottom.h = t->main.h / 2;
+		t->main.h -= t->bottom.h;
+		t->bottom.y = t->main.h;
+	}
 }
 
 void
@@ -1421,12 +1461,17 @@ main(int argc, char *argv[])
 
 	sctui_open_alt_screen();
 
+	LISTEN_SIG(SIGWINCH, SA_RESTART, resize);
+
 	running = 1;
 	while (running) {
 		draw();
 		pollev();
 		handlekey();
-		update();
+		/* keep [selected] */
+		if (cmode == ModeV)
+			selected = 1;
+		update(ctab);
 	}
 
 	sctui_close_alt_screen();
