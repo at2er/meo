@@ -4,9 +4,11 @@
 #include <locale.h>
 #include <poll.h>
 #include <regex.h>
+#include <signal.h>
 #include <stdio.h>
 #include <stdint.h>
 #include <string.h>
+#include <sys/wait.h>
 #include <unistd.h>
 #include <wchar.h> /* shit? */
 #include <wctype.h>
@@ -108,6 +110,9 @@ typedef darr(Buf*) bufs_t;
 typedef darr(struct pollfd) pfds_t;
 typedef darr(Tab) tabs_t;
 
+static char sbuf[BUFSIZ], rbuf[BUFSIZ];
+
+#include "clipboard.h"
 #include "textobj.h"
 
 static void backspace(const Arg *arg);
@@ -183,7 +188,6 @@ static int patterncomped;
 static pfds_t pfds;
 static int running;
 static int selected;
-static char sbuf[BUFSIZ], rbuf[BUFSIZ];
 static tabs_t tabs;
 
 /* events */
@@ -494,6 +498,9 @@ duptoreg(int idx, struct str *s)
 	if (*reg)
 		free(*reg);
 	*reg = s->s;
+
+	if (idx == '+')
+		clipboard_set(s);
 }
 
 /* it returns a reverse edit operation,
@@ -1112,6 +1119,9 @@ paste(const Arg *arg)
 {
 	Edit e = {0};
 	char *str = regs[arg->i];
+	struct str tmp;
+	if (arg->i == '+' && !clipboard_get(&tmp))
+		str = tmp.s;
 
 	if (cmode != ModeV) {
 		insert(&ARG(.s = str));
@@ -1365,6 +1375,8 @@ main(int argc, char *argv[])
 {
 	char *entry = NULL;
 	enum GETARG_RESULT r;
+	struct sigaction sa;
+
 	GETARG_BEGIN(r, argc, argv, opts) {
 	case GETARG_RESULT_SUCCESSFUL:
 		break;
@@ -1377,6 +1389,13 @@ main(int argc, char *argv[])
 	default:
 		return 1;
 	} GETARG_END;
+
+	sigemptyset(&sa.sa_mask);
+	sa.sa_flags = SA_NOCLDSTOP | SA_NOCLDWAIT | SA_RESTART;
+	sa.sa_handler = SIG_IGN;
+	sigaction(SIGCHLD, &sa, NULL);
+
+	while (waitpid(-1, NULL, WNOHANG) > 0);
 
 	/* for the fucking wcwidth() */
 	setlocale(LC_ALL, "");
