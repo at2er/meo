@@ -1,6 +1,7 @@
-static const int barattr = 0;
-static const int nonprintattr = SCTUI_REVERSE;
-static const int selattr = SCTUI_REVERSE;
+static int barattr = 0;
+static unsigned int findpassthrough = 1;
+static int nonprintattr = SCTUI_REVERSE;
+static int selattr = SCTUI_REVERSE;
 
 static const char *tabrender = "        ";
 
@@ -23,6 +24,8 @@ static const struct key keys_n[] = {
 	{ { 'b'       }, selword,        {.i = -1}     },
 	{ { 'c'       }, change,         {0}           },
 	{ { 'd'       }, delete,         {0}           },
+	{ { 'f'       }, findnex,        {0}           },
+	{ { 'F'       }, findprv,        {0}           },
 	{ { 'g', 'b'  }, gotoinline,     {.i = -1}     },
 	{ { 'g', 'f'  }, gotoinline,     {.i =  1}     },
 	{ { 'g', 'g'  }, gotoinfile,     {.i = -1}     },
@@ -88,6 +91,8 @@ static const struct key keys_i[] = {
 static const struct key keys_v[] = {
 	{ { 'c'       }, change,         {0}           },
 	{ { 'd'       }, delete,         {0}           },
+	{ { 'f'       }, findnex,        {0}           },
+	{ { 'F'       }, findprv,        {0}           },
 	{ { 'h'       }, moveright,      {.i = -1}     },
 	{ { 'j'       }, movedown,       {.i =  1}     },
 	{ { 'k'       }, movedown,       {.i = -1}     },

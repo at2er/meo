@@ -130,6 +130,8 @@ static void einsert(const struct str *content);
 static Line *enewline(Buf *b, Line *at);
 static void eremove(struct str *backup, unsigned int beg, unsigned int end);
 static void eremovem(struct str *backup, Pos *beg, Pos *end);
+static void findnex(const Arg *arg);
+static void findprv(const Arg *arg);
 static Line *freadline(FILE *fp);
 static Line *getln(Line *curl, unsigned int crow, unsigned int row);
 static unsigned int getrx(Line *l, unsigned int col);
@@ -625,6 +627,90 @@ eremovem(struct str *backup, Pos *beg, Pos *end)
 	if (backup)
 		estr_append_str(backup, &STR(l->s.s, bcol));
 	removeln(cwin->b, l);
+}
+
+void
+findnex(const Arg *arg)
+{
+	uint_least32_t cp;
+	Line *oln = cwin->l;
+	int k = arg->i;
+	size_t ret, off;
+
+	if (k == 0)
+		k = pollkey();
+
+	mark(&ARG(.i = '\''));
+	selected = 1;
+
+	off = coltobcol(cwin->l, cwin->col);
+	while (1) {
+		grapheme_decode_iter(cwin->l->s.s, ret, off, cp) {
+			if ((int)cp == k)
+				goto found;
+			cwin->col++;
+		}
+		if (!findpassthrough || cwin->row >= cwin->b->nline - 1) {
+			cwin->col = cwin->ocol;
+			cwin->row = cwin->orow;
+			cwin->l = oln;
+			return;
+		}
+		off = 0;
+		cwin->row++;
+		cwin->col = 0;
+		cwin->l = lineof(cwin->l->link.nex);
+	}
+found:
+	cwin->orow = cwin->row;
+	cwin->ocol = ++cwin->col;
+}
+
+void
+findprv(const Arg *arg)
+{
+	unsigned int col, found;
+	uint_least32_t cp;
+	Line *oln = cwin->l;
+	int k = arg->i;
+	size_t ret, off;
+
+	if (k == 0)
+		k = pollkey();
+
+	mark(&ARG(.i = '\''));
+	selected = 1;
+
+	while (1) {
+		cwin->col = found = off = 0;
+		grapheme_decode_iter(cwin->l->s.s, ret, off, cp) {
+			if ((int)cp == k) {
+				col = cwin->col;
+				found = 1;
+			}
+			if (cwin->col >= cwin->ocol && cwin->row == cwin->orow) {
+				if (found)
+					goto found;
+				break;
+			}
+			cwin->col++;
+		}
+		if (found && cwin->row != cwin->orow)
+			goto found;
+		found = 0;
+		if (!findpassthrough || cwin->row == 0) {
+			cwin->col = cwin->ocol;
+			cwin->row = cwin->orow;
+			cwin->l = oln;
+			return;
+		}
+		cwin->row--;
+		cwin->col = 0;
+		cwin->l = lineof(cwin->l->link.prv);
+	}
+found:
+	cwin->orow = cwin->row;
+	cwin->ocol = cwin->col = col;
 }
 
 Line *
@@ -1185,6 +1271,7 @@ setcol(Win *w, unsigned int col)
 		w->coloff = w->col;
 	else if (w->col >= w->coloff + scrw)
 		w->coloff = w->col - scrw + 1;
+	w->ocol = w->col;
 }
 
 void
