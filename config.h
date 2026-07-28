@@ -55,6 +55,7 @@ static const struct key keys_n[] = {
 	{ { CTRL('u') }, movedown,       {.i = -10}    },
 	{ { CTRL('d') }, movedown,       {.i =  10}    },
 	{ { CTRL('z') }, suspend,        {0}           },
+	{ {0},           NULL,           {0}           }
 };
 
 static const struct key keys_c[] = {
@@ -65,6 +66,7 @@ static const struct key keys_c[] = {
 	{ { KBS       }, backspace,      {0}           },
 	{ { KESC      }, mode,           {.i = ModeN}  },
 	{ { KLF       }, cmd,            {0}           },
+	{ {0},           NULL,           {0}           }
 };
 
 static const struct key keys_f[] = {
@@ -75,6 +77,7 @@ static const struct key keys_f[] = {
 	{ { KBS       }, backspace,      {0}           },
 	{ { KLF       }, search,         {0}           },
 	{ { KESC      }, mode,           {.i = ModeN}  },
+	{ {0},           NULL,           {0}           }
 };
 
 static const struct key keys_i[] = {
@@ -87,6 +90,7 @@ static const struct key keys_i[] = {
 	{ { CTRL('p') }, movedown,       {.i = -1}     },
 	{ { KBS       }, backspace,      {0}           },
 	{ { KESC      }, mode,           {.i = ModeN}  },
+	{ {0},           NULL,           {0}           }
 };
 
 static const struct key keys_v[] = {
@@ -102,6 +106,7 @@ static const struct key keys_v[] = {
 	{ { 'y'       }, yank,           {.i = '+'}    },
 	{ { CTRL('c') }, mode,           {.i = ModeN}  },
 	{ { KESC      }, mode,           {.i = ModeN}  },
+	{ {0},           NULL,           {0}           }
 };
 
 static const struct key *keys[] = {
@@ -114,11 +119,13 @@ static const struct key *keys[] = {
 };
 
 static const Cmd cmds[] = {
+	// { "b",     cmdbuf   },
+	// { "buf",   cmdbuf   },
 	{ "e",     cmdedit  },
 	{ "edit",  cmdedit  },
 	{ "q",     cmdquit  },
 	{ "quit",  cmdquit  },
 	{ "w",     cmdwrite },
 	{ "write", cmdwrite },
-	{ NULL,    NULL     },
+	{ NULL,    NULL     }
 };

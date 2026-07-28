@@ -986,6 +986,7 @@ mode(const Arg *arg)
 	case ModeC: case ModeF:
 		ctab->ow = cwin;
 		cwin = &cmdline;
+		cwin->col = 0;
 		estr_clean(&cmdline.l->s);
 		break;
 	case ModeV:
