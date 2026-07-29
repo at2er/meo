@@ -29,7 +29,7 @@ static const struct key keys_n[] = {
 	{ { 'g', 'b'  }, gotoinline,     {.i = -1}     },
 	{ { 'g', 'f'  }, gotoinline,     {.i =  1}     },
 	{ { 'g', 'g'  }, gotoinfile,     {.i = -1}     },
-	{ { 'g', 'l'  }, gotoinline,     {.i =  0}     },
+	{ { 'g', 'l'  }, selline,        {0}           },
 	{ { 'G'       }, gotoinfile,     {.i =  1}     },
 	{ { 'h'       }, moveright,      {.i = -1}     },
 	{ { 'i'       }, mode,           {.i = ModeI}  },

@@ -172,6 +172,7 @@ static size_t renderchr(Uchr *uc, const char *s);
 static void resize(int sig);
 static void search(const Arg *arg);
 static void sel(Pos *beg, Pos *end);
+static void selline(const Arg *arg);
 static void selword(const Arg *arg);
 static void setcol(Win *w, unsigned int col);
 static void setrow(Win *w, unsigned int row);
@@ -372,16 +373,17 @@ coltobcol(Line *l, unsigned int col)
 void
 delete(const Arg *arg)
 {
-	Edit e = {0};
+	Edit e = {0}, *ue;
 	e.beg.col = cwin->col;
 	e.beg.row = cwin->row;
-	if (cmode == ModeV) {
+	if (selected) {
 		e.end = SELMARK.p;
 	} else {
 		e.end = e.beg;
 		e.end.col++;
 	}
-	edit(&e);
+	ue = edit(&e);
+	duptoreg(arg->i, &ue->replace);
 }
 
 void
@@ -505,7 +507,7 @@ duptoreg(int idx, struct str *s)
 	char **reg = &regs[idx];
 	if (*reg)
 		free(*reg);
-	*reg = s->s;
+	*reg = strndup(s->s, s->len);
 
 	if (idx == '+')
 		clipboard_set(s);
@@ -545,6 +547,8 @@ edit(const Edit *e)
 
 	if (cmode == ModeV)
 		mode(&ARG(.i = ModeN));
+	if (selected)
+		selected = 0;
 
 	return &u->e;
 }
@@ -597,7 +601,7 @@ eremove(struct str *backup, unsigned int beg, unsigned int end)
 	if (beg == end)
 		return;
 
-	if (end > ustrlen(l->s.s)) {
+	if (selected == 2 || end > ustrlen(l->s.s)) {
 		fbeg.row = cwin->row;
 		fbeg.col = cwin->col;
 		fend.row = fbeg.row + 1;
@@ -802,8 +806,6 @@ gotoinline(const Arg *arg)
 		mark(&ARG(.i = '\''));
 		cwin->col = 0;
 		break;
-	case 0:
-		cwin->col = 0;
 	case 1:
 		mark(&ARG(.i = '\''));
 		cwin->col = ustrlen(cwin->l->s.s);
@@ -815,7 +817,6 @@ gotoinline(const Arg *arg)
 void
 gotomark(const Arg *arg)
 {
-	unsigned int orow = cwin->row;
 	int k = arg->i;
 	Mark *m;
 	if (k == 0)
@@ -828,7 +829,9 @@ gotomark(const Arg *arg)
 	cwin->col = m->p.col;
 	cwin->rowoff = m->rowoff;
 	cwin->coloff = m->coloff;
-	cwin->l = getln(cwin->l, orow, cwin->row);
+	cwin->l = getln(cwin->l, cwin->orow, cwin->row);
+	cwin->orow = cwin->row;
+	cwin->ocol = cwin->col;
 }
 
 void
@@ -921,6 +924,8 @@ iterln(LineIter *li)
 	li->nex = lineof(li->l->link.nex);
 	return li->l;
 end:
+	if (selected == 2)
+		li->lend += 1;
 	li->nex = NULL;
 	return li->l;
 }
@@ -1278,6 +1283,15 @@ sel(Pos *beg, Pos *end)
 	setrow(cwin, end->row);
 	setcol(cwin, end->col);
 	selected = 1;
+}
+
+void
+selline(const Arg *arg)
+{
+	cwin->col = 0;
+	mark(&ARG(.i = '\''));
+	cwin->col = ustrlen(cwin->l->s.s);
+	selected = 2; /* to delete the whole line */
 }
 
 void
