@@ -285,8 +285,9 @@ str_from_str(struct str *s, struct str *src)
 		return NULL;
 	s->siz = src->len + 1;
 	s->s = malloc(s->siz);
-	s->len = s->siz - 1;
-	strncpy(s->s, src->s, s->siz);
+	s->len = src->len;
+	strncpy(s->s, src->s, s->len);
+	s->s[s->len] = '\0';
 	return s;
 }
 

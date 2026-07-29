@@ -7,18 +7,17 @@
 #define MIN(A, B) ((A) < (B) ? (A) : (B))
 #define LENGTH(ARR) (sizeof(ARR) / sizeof((ARR)[0]))
 #define RANGE(X, MIN, MAX) ((X) >= (MIN) && (X) <= (MAX))
+#define strmatch(STR, IDXT, IDX, N, ELEM) \
+	for (IDXT IDX = 0; IDX < (N); IDX++) \
+		if (strcmp((ELEM), (STR)) == 0)
 
-#define xor_swap(A, B) \
-	do { \
-		(A) ^= (B); \
-		(B) ^= (A); \
-		(A) ^= (B); \
-	} while (0)
-
-int align(int num, int min, int max);
+unsigned int align(unsigned int num, unsigned int min, unsigned int max);
 void die(const char *msg, ...);
 void *ecalloc(size_t nmenb, size_t size);
 void *erealloc(void *p, size_t s);
+char *toprint(char buf[2], char c);
+unsigned int ustrlen(const char *str);
+int utf8_blen(unsigned char first_byte);
 
 size_t _arealloc(void **p, size_t n, size_t o);
 /* auto realloc when only n > o */

@@ -1,32 +1,25 @@
-CC = gcc
-CFLAGS = -D_DEFAULT_SOURCE -std=c99 -pedantic \
-	 -Wall -Wextra -Wno-unused-parameter -Iinclude -g3 -ggdb
-LDFLAGS = -L/usr/local/lib -lgrapheme
-AR = ar
-PREFIX = /usr/local
-
-TARGET_DIR = $(PREFIX)/bin
-
-TARGET = meo
+include config.mk
 
 SRC = meo.c utils.c $(wildcard include/*.c)
 OBJ = $(SRC:.c=.o)
 
 .PHONY: all clean install uninstall
-all: $(TARGET)
+all: meo
 
-%.o: %.c %.h config.h
+%.o: %.c %.h
 	$(CC) -c $(CFLAGS) $< -o $@
+meo.o: textobj.c textobj.h clipboard.h config.h
 
-$(TARGET): meo.h $(OBJ) $(wildcard include/*.h)
+
+meo: $(OBJ) $(wildcard include/*.h)
 	$(CC) -o $@ $(OBJ) $(LDFLAGS)
 
 clean:
 	rm -f $(OBJ) $(TARGET)
 
 install:
-	mkdir -p $(TARGET_DIR)
-	cp -f $(TARGET) $(TARGET_DIR)/$(TARGET)
+	mkdir -p $(DESTDIR)$(PREFIX)/bin
+	cp -f meo $(DESTDIR)$(PREFIX)/bin/meo
 
 uninstall:
-	rm -f $(TARGET_DIR)/$(TARGET)
+	rm -f $(DESTDIR)$(PREFIX)/bin/meo

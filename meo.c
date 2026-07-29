@@ -1,2005 +1,1473 @@
-#include <assert.h>
 #include <ctype.h>
 #include <errno.h>
-#include <libgen.h>
 #include <limits.h>
+#include <locale.h>
 #include <poll.h>
 #include <regex.h>
 #include <signal.h>
-#include <stdbool.h>
-#include <stddef.h>
 #include <stdio.h>
 #include <stdint.h>
-#include <stdlib.h>
 #include <string.h>
 #include <sys/wait.h>
 #include <unistd.h>
+#include <wchar.h> /* shit? */
+#include <wctype.h>
 
 #include <grapheme.h>
-#define UTILSH_LIST_STRIP
-#define UTILSH_DARR_REALLOC erealloc
+
 #include "darr.h"
 #include "getarg.h"
+#define UTILSH_LIST_STRIP
 #include "list.h"
 #include "sctui.h"
-
-#include "meo.h"
+#include "str.h"
+#include "skb.h"
 #include "utils.h"
 
-#define MAX_MACHES 1
+typedef union arg Arg;
 
-#define ARG(...) (union arg){__VA_ARGS__}
+#define scrw global_sctui.w
+#define scrh global_sctui.h
+#define ARG(...) (const Arg){__VA_ARGS__}
+#define ARGCV(...) sizeof(ARGV(__VA_ARGS__)) / sizeof(ARGV(__VA_ARGS__)[0]), \
+		ARGV(__VA_ARGS__)
+#define ARGV(...) (const char *[]){__VA_ARGS__}
 #define LISTEN_SIG(SIG, FLAGS, HANDLER) \
 		sigaction(SIG, &(struct sigaction){ \
 			.sa_flags = FLAGS, \
 			.sa_handler = HANDLER \
 		}, NULL)
-#define lineof(LINK) list_container_of(LINK, struct line, link)
-#define undoof(LINK) list_container_of(LINK, struct undo, link)
-#define refreshw(WREF) ((WREF)->refresh = 1)
 
-struct line_iter {
-	struct marker begm, endm;
-	struct line *l, *nex;
-	int beg, end, /* start and end col of line */
-	    row;
-};
+#define grapheme_decode_iter(STR, RET, OFF, CP) \
+	for (; (RET = grapheme_decode_utf8((STR) + OFF, SIZE_MAX, &(CP))) > 0 \
+				&& (CP) != 0; \
+			OFF += RET)
 
-static void clean_cmdbuf(void);
-static int col2bcol(struct line *l, int col);
-static void comp_pattern(const char *p, int len);
+#define lineof(LINK) utilsh_list_container_of(LINK, Line, link)
+#define undoof(LINK) utilsh_list_container_of(LINK, Undo, link)
+
+enum { ModeN, ModeC, ModeF, ModeI, ModeV };
+
+typedef struct Buf {
+	struct utilsh_list_head lines, undos;
+	unsigned int nline;
+	char path[FILENAME_MAX];
+
+	unsigned int modified:1;
+} Buf;
+
+typedef struct Cmd {
+	const char *name;
+	void (*func)(int argc, const char *argv[]);
+} Cmd;
+
+typedef struct Pos {
+	unsigned int row, col;
+} Pos;
+typedef struct Edit {
+	Pos beg, end, cursor;
+	struct str replace;
+	unsigned int setcursor:1;
+} Edit;
+
+typedef struct Line {
+	struct utilsh_list link;
+	struct str s;
+} Line;
+
+typedef struct LineIter {
+	Pos beg, end;
+	Line *l, *nex;
+	unsigned int lstart, lend, lrow;
+} LineIter;
+
+typedef struct Mark {
+	Buf *b;
+	Line *l;
+	Pos p;
+	unsigned int rowoff, coloff;
+} Mark;
+
+typedef struct Win {
+	Buf *b;
+	Line *l;
+	unsigned int row, rowoff,
+	             col, coloff;
+	unsigned int x, y, h, w;
+
+	/* if you set these value without setrow() or else,
+	 * __please remember__ set these value to ensure update() works correctly. */
+	unsigned int orow, ocol;
+} Win;
+typedef struct Tab {
+	Win main, bottom;
+	Win *w, *ow;
+} Tab;
+
+typedef struct Uchr {
+	int w, blen;
+	uint_least32_t cp;
+} Uchr;
+
+typedef struct Undo {
+	Edit e;
+	struct utilsh_list link;
+} Undo;
+
+typedef darr(Buf*) bufs_t;
+typedef darr(struct pollfd) pfds_t;
+typedef darr(Tab) tabs_t;
+
+static char sbuf[BUFSIZ], rbuf[BUFSIZ];
+
+#include "clipboard.h"
+#include "textobj.h"
+
+static void backspace(const Arg *arg);
+static int caninsert(void);
+static void change(const Arg *arg);
+static void cmd(const Arg *arg);
+static void cmdedit(int argc, const char *argv[]);
+static void cmdquit(int argc, const char *argv[]);
+static void cmdwrite(int argc, const char *argv[]);
+static unsigned int coltobcol(Line *l, unsigned int col);
+static void delete(const Arg *arg);
 static void draw(void);
-static void draw_line(struct win *w, struct line *l, int row, int beg, int end);
-static void draw_sel(void);
-static void draw_win(struct win *w);
-static void dup_to_reg(int r, char *s);
-static struct undo *edit(struct str *buf, struct edit *e);
-static void edit_insert(struct undo *u, struct edit *e);
-static void edit_new_line(int updown);
-static void empty_fbuf(struct fbuf *fb);
-static struct line *empty_line(void);
-static void fini(void);
-static void get_draw_line(struct win *w);
-static const struct key *get_keys_table(void);
-static struct line *get_line(struct line *curl, int orig, int cur);
-static struct marker *get_marker(int k);
-static char get_marker_chr(int idx);
-static void get_minmax_marker(struct marker **beg, struct marker **end);
-static char **get_reg(int k);
-static int get_rx(struct win *w, struct line *l, int col);
-static int get_ry(struct win *w, int row);
-static void init(void);
-static void init_line_iter(struct line_iter *iter, struct marker *begm, struct marker *endm);
-static struct line_iter *iter_lines(struct line_iter *iter);
-static void jumping(void);
-static void keypress(int k);
-static int match(const char *str);
-static int mode_can_insert(void);
-static struct undo *new_undo(struct fbuf *fb);
-static struct fbuf *poll_fbuf(int fd, const char *name);
-static char *read_from_cmd(const char **cmd);
-static void refreshl(struct win *w, struct line *l);
-static void remove_fbuf(struct fbuf *fb);
-static void remove_line(struct fbuf *fb, struct line *l);
-static void render_line(const struct win *w, struct line *l);
-static int request_key(void);
+static void drawbar(void);
+static void drawcmdline(void);
+static void drawline(struct str *s, unsigned int x, int selbeg, int selend);
+static void drawwin(Win *w);
+static void duptoreg(int idx, struct str *s);
+static Edit *edit(const Edit *e);
+static void einsert(const struct str *content);
+static Line *enewline(Buf *b, Line *at);
+static void eremove(struct str *backup, unsigned int beg, unsigned int end);
+static void eremovem(struct str *backup, Pos *beg, Pos *end);
+static void findnex(const Arg *arg);
+static void findprv(const Arg *arg);
+static Line *freadline(FILE *fp);
+static Line *getln(Line *curl, unsigned int crow, unsigned int row);
+static unsigned int getrx(Line *l, unsigned int col);
+static void gotoinfile(const Arg *arg);
+static void gotoinline(const Arg *arg);
+static void gotomark(const Arg *arg);
+static void handlekey(void);
+static void initcmdbuf(void);
+static void insert(const Arg *arg);
+static Line *iterln(LineIter *li);
+static const char *iterstr(struct str *result, const char *str);
+static void makelniter(LineIter *li, Pos *beg, Pos *end);
+static void mark(const Arg *arg);
+static const Cmd *matchcmd(const char *name);
+static void mode(const Arg *arg);
+static void movedown(const Arg *arg);
+static void moveright(const Arg *arg);
+static void newline(const Arg *arg);
+static void newtab(const Arg *arg);
+static Undo *newundo(Buf *b);
+static void nexmatch(const Arg *arg);
+static void paste(const Arg *arg);
+static void pollev(void);
+static int pollkey(void);
+static void redo(const Arg *arg);
+static void removeln(Buf *b, Line *l);
+static size_t renderchr(Uchr *uc, const char *s);
 static void resize(int sig);
-static void ruler(void);
-static int search_nex(void);
-static int search_prv(void);
-static void sel_word_nex(const char **beg, const char **end);
-static void sel_word_prv(const char **beg, const char **end);
-static void set_bar_buf(struct fbuf *fb);
-static void set_col(struct win *w, int col);
-static void set_row(struct win *w, int row);
-static void sys_copy(const char *s);
-static char *sys_paste(void);
-static struct fbuf *tmp_fbuf(void);
-static void update_poll_fbuf(int idx);
-static void update_tab_wins(struct tab *tab);
-static int utf8_blen(uint8_t first_byte);
-static void write_to_cmd(const char **cmd, const char *s);
-static void xfocus_win(struct win *w);
-static void xgoto_mark(struct win *w, struct marker *m);
-static int xstrlen(const char *s);
+static void search(const Arg *arg);
+static void sel(Pos *beg, Pos *end);
+static void selline(const Arg *arg);
+static void selword(const Arg *arg);
+static void setcol(Win *w, unsigned int col);
+static void setrow(Win *w, unsigned int row);
+static void suspend(const Arg *arg);
+static void swappos(Pos **beg, Pos **end);
+static void undo(const Arg *arg);
+static void update(Tab *t);
+static void updatewins(Tab *t);
+static void yank(const Arg *arg);
 
-static const char *usages[] = {
-"Usage: meo [OPTIONS] [FILE]",
-"",
-"Options:",
-"  -h, --help: show usages",
-NULL
-};
+static struct str barbuf;
+static bufs_t bufs;
+static Buf cmdbuf;
+static Win cmdline;
+static int cmode = ModeN;
+static Tab *ctab;
+#define cwin (ctab->w)
+static const char *matched;
+static regmatch_t matches[1];
+static regex_t pattern;
+static int patterncomped;
+static pfds_t pfds;
+static int running;
+static int selected;
+static tabs_t tabs;
+
+/* events */
+static int keyev;
+
+/* '\'': explicit selection by user
+ * '"':  implicit selection like some jumping actions */
+static Mark marks[UCHAR_MAX];
+#define SELMARK marks['\'']
+
+/* '"': clipboard
+ * '.': last action */
+static char *regs[UCHAR_MAX];
+#define CLIPREG regs['"']
+#define DOTREG  regs['.']
+
 static struct option opts[] = {
-	OPT_HELP("help", 'h', usages),
 	OPT_END
 };
-
-static fb_arr  fbs;
-static fb_arr  pfbs; /* poll fbuf */
-static tab_arr tabs;
-
-static struct win bar;
-static struct win *cmdback;
-static struct fbuf cmdbuf;
-static struct fbuf rulerbuf;
-
-/* '+' */
-static char *regs[1];
-
-/* state */
-static int         cmode = MODE_NOR;
-static struct tab *ctab;
-static struct line *has_sel;
-
-/* numbers + lowers + '\'' */
-static struct marker markers[10 + 26 + 1];
-#define SEL_MARKER markers[10 + 26]
-
-static struct line *matched;
-static regmatch_t matches[MAX_MACHES];
-static regex_t *pattern;
-
-typedef darr(struct pollfd) pollfd_arr;
-static pollfd_arr pfds;
-static char sbuf[BUFSIZ];
-static int running = 1;
-
-static const char *entry;
 
 #include "config.h"
 
 void
-clean_cmdbuf(void)
+backspace(const Arg *arg)
 {
-	struct line *l = lineof(cmdbuf.lines.end);
-	if (!l)
-		return;
-	l->s.s[0] = '\n';
-	l->s.s[1] = '\0';
-	l->s.len = 1;
-	*l->r = '\0';
-}
-
-int
-col2bcol(struct line *l, int col)
-{
-	int bcol = 0;
-	for (; col; col--)
-		bcol += grapheme_next_character_break_utf8(l->s.s + bcol, l->s.len - bcol);
-	return bcol;
-}
-
-void
-comp_pattern(const char *p, int len)
-{
-	char *dup = (char*)p;
-	if (len)
-		dup = strndup(p, len);
-	if (pattern)
-		regfree(pattern);
-	else
-		pattern = ecalloc(1, sizeof(*pattern));
-	if (regcomp(pattern, dup, REG_NEWLINE)) {
-		free(pattern);
-		pattern = NULL;
-	}
-}
-
-void
-draw(void)
-{
-	int rx, ry;
-	draw_win(&ctab->mw);
-	if (ctab->enable_tmpw)
-		draw_win(&ctab->tmpw);
-
-	ruler();
-	sctui_out(sctui_attr_on(bar_attr), 0);
-	draw_win(&bar);
-	sctui_out(sctui_attr_off(), 0);
-
-	if (has_sel)
-		draw_sel();
-	rx = get_rx(ctab->w, ctab->w->p.l, ctab->w->p.col);
-	ry = get_ry(ctab->w, ctab->w->p.row);
-	sctui_move(rx, ry);
-
-	sctui_commit();
-}
-
-void
-draw_line(struct win *w, struct line *l, int row, int beg, int end)
-{
-	int rx = get_rx(w, l, beg), ry = get_ry(w, row),
-	    len = get_rx(w, l, end) - rx;
-	sctui_text(rx, ry, l->r + rx, MIN(len, w->w));
-}
-
-void
-draw_sel(void)
-{
-	struct line_iter iter;
-
-	sctui_out(sctui_attr_on(sel_attr), 0);
-
-	init_line_iter(&iter, &SEL_MARKER, &ctab->w->p);
-	while (iter_lines(&iter))
-		draw_line(ctab->w, iter.l, iter.row, iter.beg, iter.end);
-
-	sctui_out(sctui_attr_off(), 0);
-}
-
-void
-draw_win(struct win *w)
-{
-	int i = 0;
-
-	if (!w->refresh)
-		return;
-
-	list_for_each(struct line, l, &w->draw->link, tmp, link) {
-		if (i >= w->h)
-			break;
-		render_line(w, l);
-		draw_line(w, l, w->p.rowoff + i, 0, w->w);
-		i++;
-	}
-
-	for (; i < w->h; i++) {
-		sctui_fill_space(sbuf, 0, w->w);
-		sctui_text(w->x, w->y + i, sbuf, w->w);
-	}
-
-	w->refresh = 0;
-}
-
-void
-dup_to_reg(int r, char *s)
-{
-	char **reg = get_reg(r);
-	if (!reg)
-		return;
-	if (*reg)
-		free(*reg);
-	*reg = s;
-
-	if (r == '+')
-		sys_copy(*reg);
-}
-
-struct undo *
-edit(struct str *buf, struct edit *e)
-{
-	int beg_bcol, end_bcol, concat = 0, olen;
-	struct str _buf;
-	struct line_iter iter;
-	struct undo *u;
-
-	u = new_undo(ctab->w->p.fb);
-	u->e = *e;
-
-	init_line_iter(&iter, &e->beg, &e->end);
-	u->e.beg = iter.begm;
-	u->e.end = iter.endm;
-
-	if (!buf)
-		buf = &_buf;
-	str_empty(buf);
-
-	set_row(ctab->w, iter.begm.row);
-	while (iter_lines(&iter)) {
-		olen = iter.l->s.len;
-		beg_bcol = col2bcol(iter.l, iter.beg);
-		end_bcol = col2bcol(iter.l, iter.end);
-		estr_append_str(buf, &STR(iter.l->s.s + beg_bcol, end_bcol - beg_bcol));
-		estr_remove(&iter.l->s, beg_bcol, end_bcol - beg_bcol);
-		refreshl(ctab->w, iter.l);
-		if (end_bcol >= olen) {
-			if (beg_bcol == 0) {
-				remove_line(iter.begm.fb, iter.l);
-				iter.row--;
-			} else if (iter.l == iter.begm.l) {
-				concat = 1;
-			}
-		}
-	}
-	if (concat) {
-		iter.l = lineof(iter.begm.l->link.nex);
-		estr_append_str(&iter.begm.l->s, &iter.l->s);
-		remove_line(iter.begm.fb, iter.l);
-	}
-
-	/* make sure the cursor is in correct position now */
-	xgoto_mark(ctab->w, &iter.begm);
-
-	if (buf->s)
-		estr_from_str(&u->e.replace, buf);
-
-	if (e->replace.s)
-		edit_insert(u, e);
-	else {
-		u->e.end = u->e.beg;
-		u->e.at.fb = NULL;
-	}
-
-	if (e->at.fb)
-		xgoto_mark(ctab->w, &e->at);
-	return u;
-}
-
-void
-edit_insert(struct undo *u, struct edit *e)
-{
-	char *c;
-	struct marker *p = &ctab->w->p;
-	struct str s, orig;
-	int bcol, len = 0, orig_col = p->col, ret;
-
-	str_empty(&orig);
-
-	s.s = e->replace.s;
-	s.len = 0;
-	for (c = e->replace.s; *c;) {
-		if (*c == '\n') {
-			if (!orig.s) {
-				bcol = col2bcol(p->l, orig_col);
-				estr_from_cstr(&orig, p->l->s.s + bcol);
-				estr_remove(&p->l->s, bcol, p->l->s.len - bcol);
-			}
-			estr_append_str(&p->l->s, &s);
-			estr_append_chr(&p->l->s, '\n');
-			c++;
-			s.s = c;
-			s.siz = s.len = len = 0;
-			edit_new_line(1);
-			continue;
-		}
-		ret = grapheme_next_character_break_utf8(c, SIZE_MAX);
-		c += ret;
-		s.len += ret;
-		len++;
-		p->col++;
-	}
-	refreshl(ctab->w, p->l);
-
-	bcol = col2bcol(p->l, p->col - len);
-	estr_insert_str(&p->l->s, bcol, &s);
-	bcol = col2bcol(p->l, p->col + len);
-	estr_insert_str(&p->l->s, bcol, &orig);
-	str_free(&orig);
-
-	set_col(ctab->w, p->col);
-
-	u->e.end = *p;
-	u->e.at = u->e.beg;
-
-	/* don't free() it */
-	str_empty(&u->e.replace);
-}
-
-void
-edit_new_line(int updown)
-{
-	struct marker *p = &ctab->w->p;
-	struct line *prv, *l;
-
-	p->fb->ldirty = 1;
-	prv = p->l;
-	if (updown == 0)
-		prv = lineof(prv->link.prv);
-	l = ecalloc(1, sizeof(*l));
-
-	list_insert(&p->fb->lines,
-			prv ? &prv->link : NULL,
-			&l->link);
-	p->fb->nline++;
-
-	if (prv)
-		refreshl(ctab->w, prv);
-	refreshl(ctab->w, l);
-
-	move_row(&ARG(.i = updown));
-}
-
-void
-empty_fbuf(struct fbuf *fb)
-{
-	struct line *l = empty_line();
-	list_init(&fb->lines);
-	list_init(&fb->undo);
-	list_insert(&fb->lines, fb->lines.end, &l->link);
-	fb->nline = 1;
-}
-
-struct line *
-empty_line(void)
-{
-	struct line *l = ecalloc(1, sizeof(*l));
-	estr_from_cstr(&l->s, "\n");
-	return l;
-}
-
-void
-fini(void)
-{
-	sctui_close_alt_screen();
-	sctui_commit();
-	sctui_fini();
-}
-
-void
-get_draw_line(struct win *w)
-{
-	int i = 0, c = w->p.row - w->p.rowoff;
-	if (w->p.row == w->p.rowoff) {
-		w->draw = w->p.l;
-		return;
-	}
-
-	list_for_each_prv(struct line, l, &w->p.l->link, tmp, link) {
-		if (i >= c) {
-			w->draw = l;
-			break;
-		}
-		i++;
-	}
-}
-
-const struct key *
-get_keys_table(void)
-{
-	switch (cmode) {
-	case MODE_NOR:
-		return normal_keys;
-	case MODE_INS:
-		return insert_keys;
-	case MODE_CMD:
-	case MODE_SEARCH:
-		return cmd_keys;
-	}
-
-	die("get_keys_table()");
-
-	return NULL;
-}
-
-struct line *
-get_line(struct line *curl, int orig, int cur)
-{
-	int i = cur - orig;
-	if (i < 0) {
-		list_for_each_prv(struct line, l, &curl->link, tmp, link) {
-			if (i >= 0)
-				return l;
-			i++;
-		}
-	} else if (i > 0) {
-		list_for_each(struct line, l, &curl->link, tmp, link) {
-			if (i <= 0)
-				return l;
-			i--;
-		}
-	} else {
-		return curl;
-	}
-	return NULL;
-}
-
-struct marker *
-get_marker(int k)
-{
-	if (k >= '0' && k <= '9') {
-		k -= '0';
-	} else if (k >= 'a' && k <= 'z') {
-		k = k - 'a' + 10;
-	} else if (k == '\'') {
-		k = &SEL_MARKER - markers;
-	} else {
-		return NULL;
-	}
-	return &markers[k];
-}
-
-char
-get_marker_chr(int idx)
-{
-	if (idx >= 0 && idx <= 9) {
-		idx += '0';
-	} else if (idx >= 10 && idx <= 26) {
-		idx = idx - 10 + 'a';
-	} else if (idx == &SEL_MARKER - markers) {
-		idx = '\'';
-	}
-	return idx;
-}
-
-void
-get_minmax_marker(struct marker **beg, struct marker **end)
-{
-	struct marker *b = *beg, *e = *end;
-	if (b->row > e->row
-	|| (b->row == e->row && b->col > e->col)) {
-		*end = b;
-		*beg = e;
-	}
-}
-
-char **
-get_reg(int k)
-{
-	if (k == '+')
-		k = 0;
-	else
-		return NULL;
-	return &regs[k];
-}
-
-int
-get_rx(struct win *w, struct line *l, int col)
-{
-	int byte, i, ret, rx;
-	uint_least32_t cp;
-	byte = rx = 0;
-	for (i = 0; i < col && byte < (int)l->s.len; i++) {
-		switch (l->s.s[byte]) {
-		case '\t':
-			rx += strlen(tab_render);
-			break;
-		default:
-			rx++;
-			if (!((ret = grapheme_decode_utf8(l->s.s+byte,
-			       l->s.len - byte, &cp)) > (int)(l->s.len - byte) ||
-			      cp == GRAPHEME_INVALID_CODEPOINT)) {
-				if ((cp >= 0xac00 && cp <= 0xd7af) ||
-				    (cp >= 0x2e80 && cp <= 0x9fff) ||
-				    (cp >= 0x9f00 && cp <= 0xfaff) ||
-				    (cp >= 0xff00 && cp <= 0xffef) ||
-				    (cp >= 0x1f0000 && cp <= 0x1f9ff))
-				rx++;
-			}
-			break;
-		}
-		byte += grapheme_next_character_break_utf8(l->s.s+byte, l->s.len - byte);
-	}
-	if (i < col)
-		rx += col - i;
-	return w->x + rx;
-}
-
-int
-get_ry(struct win *w, int row)
-{
-	return w->y + row - w->p.rowoff;
-}
-
-void
-init(void)
-{
-	struct sigaction sa;
-
-	sctui_init();
-	sctui_open_alt_screen();
-
-	sigemptyset(&sa.sa_mask);
-	sa.sa_flags = SA_NOCLDSTOP | SA_NOCLDWAIT | SA_RESTART;
-	sa.sa_handler = SIG_IGN;
-	sigaction(SIGCHLD, &sa, NULL);
-
-	while (waitpid(-1, NULL, WNOHANG) > 0);
-
-	LISTEN_SIG(SIGWINCH, SA_RESTART, resize);
-
-	darr_init(&pfds);
-	darr_expand(&pfds);
-	pfds.e[0].fd = STDIN_FILENO;
-	pfds.e[0].events = POLLIN;
-
-	ctab = ecalloc(1, sizeof(*ctab));
-	ctab->w = &ctab->mw;
-	memset(&ctab->mw, 0, sizeof(ctab->mw));
-	memset(&ctab->tmpw, 0, sizeof(ctab->tmpw));
-
-	darr_init(&tabs);
-	darr_append(&tabs, ctab);
-
-	ctab->w->w = global_sctui.w;
-	ctab->w->h = global_sctui.h - 1;
-
-	empty_fbuf(&rulerbuf);
-	rulerbuf.nline = 1;
-	empty_fbuf(&cmdbuf);
-
-	memset(&bar, 0, sizeof(bar));
-	bar.y = global_sctui.h - 1;
-	bar.w = global_sctui.w;
-	bar.h = 1;
-	set_bar_buf(&rulerbuf);
-
-	if (!entry)
-		cmd_edit(0, NULL);
-	else
-		cmd_edit(2, (const char*[]){"e", entry});
-}
-
-void
-init_line_iter(struct line_iter *iter, struct marker *begm, struct marker *endm)
-{
-	get_minmax_marker(&begm, &endm);
-	iter->begm = *begm;
-	iter->endm = *endm;
-	if (iter->endm.col == 0 && iter->begm.l != iter->endm.l) {
-		iter->endm.l = lineof(iter->endm.l->link.prv);
-		iter->endm.col = xstrlen(iter->endm.l->s.s);
-		iter->endm.row--;
-	}
-	if (!iter->endm.l->link.nex && iter->endm.col >= (int)iter->endm.l->s.len)
-		iter->endm.col = xstrlen(iter->endm.l->s.s) - 1;
-	iter->l = iter->nex = iter->begm.l;
-	iter->row = iter->begm.row;
-}
-
-struct line_iter *
-iter_lines(struct line_iter *iter)
-{
-	if (!iter->nex)
-		return NULL;
-
-	if (iter->l != iter->nex)
-		iter->row++;
-	iter->l = iter->nex;
-	if (iter->begm.l == iter->endm.l) {
-		if (iter->begm.col == iter->endm.col)
-			return NULL;
-		iter->beg = iter->begm.col;
-		iter->end = iter->endm.col;
-		goto end;
-	} else if (iter->l == iter->begm.l) {
-		iter->beg = iter->begm.col;
-		iter->end = xstrlen(iter->begm.l->s.s);
-	} else if (iter->l == iter->endm.l) {
-		iter->beg = 0;
-		iter->end = iter->endm.col;
-		if (iter->beg == iter->end)
-			return NULL;
-		goto end;
-	} else {
-		iter->beg = 0;
-		iter->end = xstrlen(iter->l->s.s);
-	}
-
-	iter->nex = lineof(iter->l->link.nex);
-	return iter;
-end:
-	iter->nex = NULL;
-	return iter;
-}
-
-void
-jumping(void)
-{
-	mark(&ARG(.i = '\''));
-	has_sel = ctab->w->p.l;
-}
-
-void
-keypress(int k)
-{
-	char *buf;
-	int h;
-
-	if (k == 0)
-		return;
-
-	h = skb_handle_key(k, get_keys_table());
-	if (!h && !mode_can_insert()) {
-		skb_ncombo = 0;
-		return;
-	}
-	if (h)
-		return;
-
-	buf = sbuf;
-	for (int i = 0; i < skb_ncombo; i++) {
-		*buf = skb_combo[i];
-		buf++;
-	}
-	for (int l = utf8_blen(*(buf - 1)) - 1; l > 0; l--, buf++) {
-		k = sctui_grab_key();
-		*buf = k;
-	}
-	*buf = '\0';
-	skb_ncombo = 0;
-
-	insert(&ARG(.s = sbuf));
-}
-
-int
-match(const char *str)
-{
-	int r;
-	if (!pattern)
-		return 0;
-
-	matched = NULL;
-
-	r = !regexec(pattern, str, MAX_MACHES, matches, 0);
-	if (r) {
-		set_col(ctab->w, matches[0].rm_so);
-		SEL_MARKER = ctab->w->p;
-		set_col(ctab->w, matches[0].rm_eo);
-		matched = has_sel = ctab->w->p.l;
-	}
-
-	return r;
-}
-
-int
-mode_can_insert(void)
-{
-	switch (cmode) {
-	case MODE_INS:
-	case MODE_CMD:
-	case MODE_SEARCH:
-		return 1;
-	}
-	return 0;
-}
-
-struct fbuf *
-poll_fbuf(int fd, const char *name)
-{
-	struct fbuf *fb = ecalloc(1, sizeof(*fb));
-	struct line *l = empty_line();
-
-	fb->nline = 1;
-	list_init(&fb->lines);
-	list_insert(&fb->lines, fb->lines.end, &l->link);
-
-	darr_append(&fbs, fb);
-	darr_append(&pfbs, fb);
-	darr_expand(&pfds);
-	darr_last(&pfds).fd = fd;
-	darr_last(&pfds).events = POLLIN;
-
-	strcpy(fb->path, name ? name : "<poll>");
-	fb->tmp = fb->poll = 1;
-	fb->pos.fb = fb;
-
-	return fb;
-}
-
-struct undo *
-new_undo(struct fbuf *fb)
-{
-	struct undo *u;
-
-	if (fb->undo.end && fb->undo.end->nex) {
-		fb->undo.end = fb->undo.end->nex;
-		u = undoof(fb->undo.end);
-		str_free(&u->e.replace);
-		return u;
-	}
-
-	u = ecalloc(1, sizeof(*u));
-	list_insert(&fb->undo, fb->undo.end, &u->link);
-	return u;
-}
-
-char *
-read_from_cmd(const char **cmd)
-{
-	int fds[2], r;
-	struct str result;
-
-	if (pipe(fds) < 0)
-		die("pipe()");
-
-	if (fork() == 0) {
-		close(fds[0]);
-		if (dup2(fds[1], STDOUT_FILENO) < 0)
-			die("dup2()");
-		close(fds[1]);
-		execvp(cmd[0], (char**)cmd);
-		die("execvp()");
-	}
-
-	str_empty(&result);
-	close(fds[1]);
-	while ((r = read(fds[0], sbuf, sizeof(sbuf) - 1)))
-		estr_append_str(&result, &STR(sbuf, r));
-	close(fds[0]);
-
-	return result.s;
-}
-
-void
-refreshl(struct win *w, struct line *l)
-{
-	*l->r = 0;
-	if (w)
-		refreshw(w);
-}
-
-void
-remove_fbuf(struct fbuf *fb)
-{
-	for (int i = 0; i < fbs.n; i++) {
-		if (fbs.e[i] == fb) {
-			darr_remove(&fbs, i);
-			goto clean;
-		}
-	}
-	return;
-
-clean:
-	list_for_each(struct line, l, fb->lines.beg, nex, link) {
-		str_free(&l->s);
-		free(l);
-	}
-
-	free(fb->_name);
-	free(fb);
-}
-
-void
-remove_line(struct fbuf *fb, struct line *l)
-{
-	fb->ldirty = 1;
-	fb->nline--;
-	list_remove(&fb->lines, &l->link);
-	str_free(&l->s);
-	free(l);
-}
-
-void
-render_line(const struct win *w, struct line *l)
-{
-	int p = 0, t;
-
-	if (*l->r != 0)
-		return;
-
-	for (int i = 0; p < VLINE_RENDER_MAX; i++) {
-		if (i >= (int)l->s.len)
-			goto space;
-		switch (l->s.s[i]) {
-		case '\t':
-			if ((t = strlen(tab_render)) + p >= VLINE_RENDER_MAX)
-				t = VLINE_RENDER_MAX - p;
-			memcpy(l->r + p, tab_render, t);
-			p += t;
-			break;
-		case '\n':
-		space:
-			l->r[p] = ' ';
-			p++;
-			break;
-		default:
-			l->r[p] = l->s.s[i];
-			p++;
-			break;
-		}
-	}
-}
-
-int
-request_key(void)
-{
-	draw();
-
-	if (poll(pfds.e, pfds.n, -1) == -1 && errno != EINTR)
-		die("poll()");
-	for (int i = 1; i < pfds.n; i++) {
-		if (pfds.e[i].revents & POLLIN)
-			update_poll_fbuf(i);
-		if (pfds.e[i].revents & POLLHUP) {
-			darr_remove(&pfbs, i - 1);
-			darr_remove(&pfds, i);
-		}
-	}
-	if (!(pfds.e[0].revents & POLLIN))
-		return 0;
-	return sctui_grab_key();
-}
-
-void
-resize(int sig)
-{
-	sctui_update();
-	bar.y = global_sctui.h - 1;
-	bar.w = global_sctui.w;
-	for (int i = 0; i < tabs.n; i++)
-		update_tab_wins(tabs.e[i]);
-	redraw(0);
-}
-
-void
-ruler(void)
-{
-	char *buf = sbuf, *fname;
-	struct line *l;
-	int len, padding;
-	struct marker *p = &ctab->w->p;
-
-	l = lineof(rulerbuf.lines.beg);
-
-	estr_clean(&l->s);
-	if (ctab->w == &bar)
-		return;
-
-	memset(buf, ' ', bar.w);
-
-	for (int i = 0; i < skb_ncombo; i++) {
-		switch (skb_combo[i]) {
-		case ' ':
-			*buf++ = '/';
-			*buf++ = 's';
-			break;
-		default:
-			*buf++ = skb_combo[i];
-			break;
-		}
-	}
-
-	buf++;
-	buf += snprintf(buf, BUFSIZ - (buf - sbuf), "%d,%d",
-			p->row + 1, p->col + 1);
-	len = buf - sbuf;
-
-	fname = p->fb->name;
-	if (!fname)
-		fname = p->fb->path;
-	padding = global_sctui.w - len - strlen(fname) - 2;
-	estr_append_cstr(&l->s, fname);
-	estr_append_cstr(&l->s, "  ");
-
-	if (mode_str[cmode]) {
-		padding -= strlen(mode_str[cmode]);
-		estr_append_cstr(&l->s, mode_str[cmode]);
-	}
-
-	for (int i = 0; i < padding; i++)
-		estr_append_chr(&l->s, ' ');
-
-	estr_append_cstr(&l->s, sbuf);
-
-	refreshl(&bar, l);
-}
-
-int
-search_nex(void)
-{
-	if (matched) {
-		if (ctab->w->p.row >= ctab->w->p.fb->nline - 1)
-			return 0;
-		move_row(&ARG(.i = 1));
-	}
-	do {
-		if (match(ctab->w->p.l->s.s))
-			return 1;
-		if (ctab->w->p.row >= ctab->w->p.fb->nline - 1)
-			break;
-		move_row(&ARG(.i = 1));
-	} while (1);
-
-	return 0;
-}
-
-int
-search_prv(void)
-{
-	if (matched) {
-		if (ctab->w->p.row <= 0)
-			return 0;
-		move_row(&ARG(.i = -1));
-	}
-
-	do {
-		if (match(ctab->w->p.l->s.s))
-			return 1;
-		if (ctab->w->p.row <= 0)
-			break;
-		move_row(&ARG(.i = -1));
-	} while (1);
-
-	return 0;
-}
-
-void
-sel_word_nex(const char **beg, const char **end)
-{
-	const char *b = *beg, *e = *end;
-	while (*b && !isalpha(*b))
-		b++;
-	e = b;
-
-	while (*e && (isalpha(*e) || *e == '_'))
-		e++;
-	do {
-		if (b == ctab->w->p.l->s.s)
-			break;
-		b--;
-		if (!isalpha(*b) && *b != '_') {
-			b++;
-			break;
-		}
-	} while (1);
-	*beg = b;
-	*end = e;
-}
-
-void
-sel_word_prv(const char **beg, const char **end)
-{
-	const char *b = *beg, *e = *beg;
-	int skip = 0;
-
-	if (isalpha(*e) || *e == '_')
-		skip = 1;
-
-	do {
-		if (e == ctab->w->p.l->s.s)
-			break;
-		e--;
-		if (skip && (isalpha(*e) || *e == '_'))
-			continue;
-		skip = 0;
-		if (isalpha(*e) || *e == '_') {
-			e++;
-			break;
-		}
-	} while (1);
-
-	b = e;
-	do {
-		if (b == ctab->w->p.l->s.s)
-			break;
-		b--;
-		if (!isalpha(*b) && *b != '_') {
-			b++;
-			break;
-		}
-	} while (1);
-
-	*beg = e;
-	*end = b;
-}
-
-void
-set_bar_buf(struct fbuf *fb)
-{
-	clean_cmdbuf();
-	bar.p.fb = fb;
-	bar.p.l = bar.draw = lineof(fb->lines.beg);
-	set_col(&bar, 0);
-	refreshw(&bar);
-}
-
-void
-set_col(struct win *w, int col)
-{
-	int max = 0;
-	struct marker *p = &w->p;
-	if (p->l && p->l->s.s)
-		max = xstrlen(p->l->s.s) - 1;
-	p->col = align(col, 0, max);
-	p->fb->pos.col = p->col;
-	refreshw(w);
-}
-
-void
-set_row(struct win *w, int row)
-{
-	int orig = w->p.row;
-
-	w->p.row = align(row, 0, w->p.fb->nline - 1);
-	if (w->p.row <= w->p.rowoff)
-		w->p.rowoff = w->p.row;
-	else if (w->p.row >= w->p.rowoff + w->h)
-		w->p.rowoff = w->p.row - w->h + 1;
-	w->p.fb->pos.row = w->p.row;
-	w->p.fb->pos.rowoff = w->p.rowoff;
-
-	refreshw(w);
-
-	if (w->p.row == 0) {
-		w->p.l = lineof(w->p.fb->lines.beg);
-	} else if (w->p.row == w->p.fb->nline - 1) {
-		w->p.l = lineof(w->p.fb->lines.end);
-	} else {
-		if (w->p.fb->ldirty) {
-			w->p.l = lineof(w->p.fb->lines.beg);
-			orig = 0;
-		}
-		w->p.l = get_line(w->p.l, orig, w->p.row);
-	}
-	get_draw_line(w);
-
-	w->p.fb->pos.l = w->p.l;
-
-	set_col(w, w->p.col);
-}
-
-void
-sys_copy(const char *s)
-{
-	const char **cmd = sys_copy_cmd();
-	if (!cmd)
-		return;
-	write_to_cmd(cmd, s);
-}
-
-char *
-sys_paste(void)
-{
-	const char **cmd = sys_paste_cmd();
-	if (!cmd)
-		return NULL;
-	return read_from_cmd(cmd);
-}
-
-struct fbuf *
-tmp_fbuf(void)
-{
-	struct fbuf *fb = ecalloc(1 ,sizeof(*fb));
-
-	darr_append(&fbs, fb);
-	list_init(&fb->lines);
-
-	strcpy(fb->path, "<tmp>");
-	fb->tmp = 1;
-	fb->pos.fb = fb;
-
-	return fb;
-}
-
-void
-update_poll_fbuf(int idx)
-{
-	struct fbuf *fb = pfbs.e[idx - 1];
-	struct pollfd *fd = &pfds.e[idx];
-	struct line *l = lineof(fb->lines.end);
-	int r;
-
-	if (!(r = read(fd->fd, sbuf, sizeof(sbuf) - 1)))
-		return;
-	for (int i = 0; i < r; i++) {
-		estr_insert_chr(&l->s, l->s.len - 1, sbuf[i]);
-		refreshl(NULL, l);
-		if (sbuf[i] == '\n') {
-			l = empty_line();
-			estr_expand_siz(&l->s, DEFAULT_PFB_LINE_SIZ);
-			list_insert(&fb->lines, fb->lines.end, &l->link);
-			fb->nline++;
-		}
-	}
-
-	for (int i = 0; i < tabs.n; i++) {
-		if (tabs.e[i]->mw.p.fb == fb)
-			refreshw(&tabs.e[i]->mw);
-		else if (tabs.e[i]->tmpw.p.fb == fb)
-			refreshw(&tabs.e[i]->tmpw);
-	}
-}
-
-void
-update_tab_wins(struct tab *tab)
-{
-	int maxh = global_sctui.h - 1;
-	tab->mw.h = maxh;
-	tab->mw.w = global_sctui.w;
-	if (tab->enable_tmpw) {
-		tab->tmpw.h = maxh / 2;
-		tab->tmpw.y = tab->tmpw.h + maxh % 2;
-		tab->tmpw.w = global_sctui.w;
-		tab->mw.h = tab->tmpw.y;
-		xgoto_mark(&tab->tmpw, &tab->tmpw.p);
-	}
-	xgoto_mark(&tab->mw, &tab->mw.p);
-}
-
-int
-utf8_blen(uint8_t first_byte)
-{
-	if (first_byte <= 0x7F)
-		return 1;
-	else if (RANGE(first_byte, 0xC0, 0xDF))
-		return 2;
-	else if (RANGE(first_byte, 0xE0, 0xEF))
-		return 3;
-	else if (RANGE(first_byte, 0xF0, 0xF7))
-		return 4;
-	return -1;
-}
-
-void
-write_to_cmd(const char **cmd, const char *s)
-{
-	int fds[2];
-
-	if (pipe(fds) < 0)
-		die("pipe()");
-
-	if (fork() == 0) {
-		close(fds[1]);
-		if (dup2(fds[0], STDIN_FILENO) < 0)
-			die("dup2()");
-		close(fds[0]);
-		execvp(cmd[0], (char**)cmd);
-		die("execvp()");
-	}
-
-	close(fds[0]);
-	write(fds[1], s, strlen(s));
-	close(fds[1]);
-}
-
-void
-xfocus_win(struct win *w)
-{
-	if (w == &ctab->tmpw && !ctab->enable_tmpw) {
-		toggle_tmp_win(0);
-		return;
-	}
-	w->prv = ctab->w;
-	ctab->w = w;
-	refreshw(ctab->w);
-}
-
-void
-xgoto_mark(struct win *w, struct marker *m)
-{
-	if (w->p.fb != m->fb)
-		w->prv_fb = w->p.fb;
-	w->p.fb = m->fb;
-	if (w->p.fb->ldirty || !m->l)
-		m->l = get_line(lineof(m->fb->lines.beg), 0, m->row);
-	w->p.l = m->l;
-	w->p.row = m->row;
-	w->p.rowoff = m->rowoff;
-	set_row(w, m->row);
-	set_col(w, m->col);
-}
-
-int
-xstrlen(const char *s)
-{
-	int ulen = 0;
-	for (int i = 0; s[i]; ulen++)
-		i += grapheme_next_character_break_utf8(s+i, SIZE_MAX);
-	return ulen;
-}
-
-/* key functions */
-void
-backspace(const union arg *arg)
-{
-	struct edit e;
-	int pos = ctab->w->p.col - arg->i;
-	e.beg = e.end = ctab->w->p;
-	if (pos < 0) {
-		if (!e.beg.l->link.prv)
+	Edit e = {0};
+	Line *l = cwin->l;
+	e.end.row = cwin->row;
+	e.end.col = cwin->col;
+	e.beg = e.end;
+
+	if (e.beg.col == 0) {
+		if (e.beg.row == 0)
 			return;
-		e.beg.l = lineof(e.beg.l->link.prv);
+		l = lineof(cwin->l->link.prv);
 		e.beg.row--;
-		e.beg.col = e.beg.l->s.len - 1;
+		e.beg.col = ustrlen(l->s.s);
 	} else {
 		e.beg.col--;
 	}
-	e.at = e.beg;
-	str_empty(&e.replace);
-	edit(NULL, &e);
+
+	edit(&e);
+}
+
+unsigned int
+bcoltocol(Line *l, unsigned int bcol)
+{
+	unsigned int col = 0;
+	for (unsigned int off = 0; off < bcol && l->s.s[off]; col++)
+		off += grapheme_next_character_break_utf8(l->s.s + off, SIZE_MAX);
+	return col;
+}
+
+int
+caninsert(void)
+{
+	switch (cmode) {
+	case ModeC: case ModeF: case ModeI:
+		return 1;
+	default:
+		return 0;
+	}
 }
 
 void
-change(const union arg *arg)
+change(const Arg *arg)
 {
+	if (selected == 2)
+		selected = 1;
 	delete(arg);
-	mode(&ARG(.i = MODE_INS));
+	mode(&ARG(.i = ModeI));
 }
 
 void
-cmd(const union arg *arg)
+cmd(const Arg *arg)
 {
-	int m = cmode;
-	char *tok, *dup, *saver;
+	darr(char *) args;
+	const Cmd *c;
+	char *dup = NULL, *saver, *tok;
 
-	darr(char*) args;
+	if (arg->s)
+		dup = strdup(arg->s);
+	if (cmode == ModeC) {
+		mode(&ARG(.i = ModeN));
+		if (!cmdline.l->s.s[0])
+			return;
+		if (!dup)
+			dup = strdup(cmdline.l->s.s);
+	}
+
+	if (!dup)
+		return;
+
 	darr_init(&args);
 
-	if (arg->s) {
-		dup = strdup(arg->s);
-	} else {
-		dup = strdup(bar.p.l->s.s);
-		if (dup[bar.p.l->s.len - 1] == '\n')
-			dup[bar.p.l->s.len - 1] = '\0';
-		clean_cmdbuf();
-		refreshl(&bar, bar.p.l);
-	}
+	for (tok = dup; (tok = strtok_r(tok, " \r\t\n", &saver)); tok = NULL)
+		darr_append(&args, tok);
 
-	mode(&ARG(.i = MODE_NOR));
+	darr_append(&args, NULL);
+	args.n--;
 
-	switch (m) {
-	case MODE_SEARCH:
-		comp_pattern(dup, 0);
-		match(ctab->w->p.l->s.s);
-		break;
-	default:
-		for (tok = dup; ; tok = NULL) {
-			if (!(tok = strtok_r(tok, " \t\n", &saver)))
-				break;
-			darr_append(&args, tok);
-		}
-		darr_append(&args, NULL);
-		args.n--;
-		break;
-	}
+	if (!(c = matchcmd(args.e[0])))
+		goto clean;
 
-	if (!args.n || !args.e[0])
-		goto end;
-
-	for (int i = 0; cmds[i].cmd != NULL; i++) {
-		if (strcmp(cmds[i].cmd, args.e[0]) == 0 ||
-		    strcmp(cmds[i].alias, args.e[0]) == 0) {
-			cmds[i].func(args.n, (const char**)args.e);
-			break;
-		}
-	}
-
-	cmd_goto_line(args.n, (const char **)args.e);
-
-end:
+	c->func(args.n, (const char **)args.e);
+clean:
+	free(args.e);
 	free(dup);
 }
 
 void
-delete(const union arg *arg)
+cmdedit(int argc, const char *argv[])
 {
-	struct str _buf, *buf = NULL;
-	struct edit e;
-
-	e.at.fb = NULL;
-	e.beg = ctab->w->p;
-	if (has_sel) {
-		e.end = SEL_MARKER;
-		buf = &_buf;
-	} else {
-		e.end = e.beg;
-		e.end.col++;
-	}
-	str_empty(&e.replace);
-	edit(buf, &e);
-
-	if (buf && buf->s)
-		dup_to_reg('+', buf->s);
-
-	has_sel = NULL;
-}
-
-void
-find_nex(const union arg *arg)
-{
-	struct marker *p = &ctab->w->p;
-	const char *c = p->l->s.s + p->col;
-	int k = request_key();
-	struct marker orig = *p;
-
-	jumping();
-	while (*c) {
-		if (*c == k)
-			break;
-		if (*c == '\n') {
-			if (arg->i && &p->l->link != p->fb->lines.end) {
-				move_row(&ARG(.i = 1));
-				c = p->l->s.s;
-				continue;
-			} else {
-				goto back;
-			}
-		}
-		c++;
-	}
-
-	c++; /* let the selection include expected character */
-	has_sel = p->l;
-	set_col(ctab->w, c - p->l->s.s);
-	return;
-back:
-	xgoto_mark(ctab->w, &orig);
-}
-
-void
-find_prv(const union arg *arg)
-{
-	struct marker *p = &ctab->w->p;
-	const char *c = p->l->s.s + p->col;
-	int k = request_key();
-	struct marker orig = *p;
-
-	jumping();
-	while (*c) {
-		if (*c == k)
-			break;
-		if (c == p->l->s.s) {
-			if (arg->i && &p->l->link != p->fb->lines.beg) {
-				move_row(&ARG(.i = - 1));
-				c = p->l->s.s + p->l->s.len - 1;
-				continue;
-			} else {
-				goto back;
-			}
-		}
-		c--;
-	}
-
-	has_sel = p->l;
-	set_col(ctab->w, c - p->l->s.s);
-	return;
-back:
-	xgoto_mark(ctab->w, &orig);
-}
-
-void
-focus_win(const union arg *arg)
-{
-	struct win *w;
-	switch (arg->i) {
-	case FOCUS_PRV:
-		if (!ctab->w->prv)
-			return;
-		w = ctab->w->prv;
-		break;
-	case FOCUS_MAIN: w = &ctab->mw;    break;
-	case FOCUS_TMP:  w = &ctab->tmpw;  break;
-	}
-	xfocus_win(w);
-}
-
-void
-goto_beg(const union arg *arg)
-{
-	switch (arg->i) {
-	case GOTO_IN_FILE:
-		set_row(ctab->w, 0);
-		break;
-	case GOTO_IN_LINE:
-		jumping();
-		set_col(ctab->w, 0);
-		break;
-	}
-}
-
-void
-goto_end(const union arg *arg)
-{
-	switch (arg->i) {
-	case GOTO_IN_FILE:
-		set_row(ctab->w, ctab->w->p.fb->nline - 1);
-		break;
-	case GOTO_IN_LINE:
-		jumping();
-		set_col(ctab->w, ctab->w->p.l->s.len - 1);
-		break;
-	}
-}
-
-void
-goto_mark(const union arg *arg)
-{
-	int k;
-	struct marker *m;
-
-	if (arg->i == 0)
-		k = request_key();
-	else
-		k = arg->i;
-
-	m = get_marker(k);
-	if (!m)
-		return;
-	if (!m->fb)
-		return;
-
-	xgoto_mark(ctab->w, m);
-}
-
-void
-insert(const union arg *arg)
-{
-	struct edit e;
-	e.at.fb = NULL;
-	e.beg = e.end = ctab->w->p;
-	estr_from_cstr(&e.replace, arg->s);
-	edit(NULL, &e);
-	str_free(&e.replace);
-	has_sel = NULL;
-}
-
-void
-mark(const union arg *arg)
-{
-	int k;
-	struct marker *m;
-
-	if (arg->i == 0)
-		k = request_key();
-	else
-		k = arg->i;
-
-	m = get_marker(k);
-	if (!m)
-		return;
-
-	*m = ctab->w->p;
-}
-
-void
-mode(const union arg *arg)
-{
-	int orig = cmode;
-	cmode = arg->i;
-	switch (cmode) {
-	case MODE_CMD:
-	case MODE_SEARCH:
-		has_sel = NULL;
-		set_bar_buf(&cmdbuf);
-		cmdback = ctab->w;
-		ctab->w = &bar;
-		break;
-	default:
-		if (orig == MODE_CMD || orig == MODE_SEARCH) {
-			set_bar_buf(&rulerbuf);
-			ctab->w = cmdback;
-		}
-		break;
-	}
-}
-
-void
-move_col(const union arg *arg)
-{
-	set_col(ctab->w, ctab->w->p.col + arg->i);
-	has_sel = NULL;
-}
-
-void
-move_row(const union arg *arg)
-{
-	set_row(ctab->w, ctab->w->p.row + arg->i);
-	has_sel = NULL;
-}
-
-void
-new_line(const union arg *arg)
-{
-	struct edit e;
-	e.at.fb = NULL;
-	e.beg = ctab->w->p;
-	if (arg->i < 0) {
-		e.beg.col = 0;
-		e.at = e.beg;
-	} else
-		e.beg.col = e.beg.l->s.len - 1;
-	e.end = e.beg;
-	estr_from_cstr(&e.replace, "\n");
-	edit(NULL, &e);
-	str_free(&e.replace);
-	has_sel = NULL;
-}
-
-void
-paste(const union arg *arg)
-{
-	char **reg = get_reg(arg->s[0]);
-	if (arg->s[0] == '+') {
-		if (*reg)
-			free(*reg);
-		*reg = sys_paste();
-	}
-	if (!reg || !*reg)
-		return;
-	if (!arg->s[1])
-		move_col(&ARG(.i = 1));
-	insert(&ARG(.s = *reg));
-}
-
-void
-redo(const union arg *arg)
-{
-	struct edit e;
-	struct fbuf *fb = ctab->w->p.fb;
-	struct undo *u;
-	if (!fb->undo.end->nex)
-		return;
-	u = undoof(fb->undo.end->nex);
-	e = u->e;
-	str_empty(&u->e.replace);
-	edit(NULL, &e);
-}
-
-void
-redraw(const union arg *arg)
-{
-	sctui_clear();
-	refreshw(&ctab->mw);
-	if (ctab->enable_tmpw)
-		refreshw(&ctab->tmpw);
-	refreshw(&bar);
-}
-
-void
-search(const union arg *arg)
-{
-	int (*fn)(void) = search_nex;
-	struct marker orig;
-
-	if (!pattern)
-		return;
-
-	orig = ctab->w->p;
-
-	/* TODO: search in same line */
-	if (arg->i == -1)
-		fn = search_prv;
-	if (fn())
-		return;
-
-	if (arg->i == -1) {
-		goto_end(&ARG(.i = GOTO_IN_FILE));
-	} else {
-		goto_beg(&ARG(.i = GOTO_IN_FILE));
-	}
-
-	matched = NULL;
-
-	if (fn())
-		return;
-
-	xgoto_mark(ctab->w, &orig);
-	has_sel = NULL;
-}
-
-void
-sel(const union arg *arg)
-{
-	has_sel = SEL_MARKER.l;
-}
-
-void
-sel_word(const union arg *arg)
-{
-	const char *beg, *end, *t;
-	struct line *l;
-
-	l = ctab->w->p.l;
-	beg = l->s.s + ctab->w->p.col;
-
-	if (arg->i > 0)
-		sel_word_nex(&beg, &end);
-	else
-		sel_word_prv(&beg, &end);
-
-	set_col(ctab->w, beg - l->s.s);
-	jumping();
-
-	set_col(ctab->w, end - l->s.s);
-
-	refreshw(ctab->w);
-
-	if (beg > end) {
-		t = beg;
-		beg = end;
-		end = t;
-	}
-	comp_pattern(beg, end - beg);
-	matched = has_sel;
-}
-
-void
-suspend(const union arg *arg)
-{
-	sctui_fini();
-	sctui_close_alt_screen();
-	sctui_commit();
-	kill(0, SIGSTOP);
-	redraw(0);
-	sctui_init();
-	sctui_open_alt_screen();
-	sctui_commit();
-}
-
-void
-swap_sel(const union arg *arg)
-{
-	struct marker save = ctab->w->p;
-	xgoto_mark(ctab->w, &SEL_MARKER);
-	SEL_MARKER = save;
-}
-
-void
-toggle_tmp_win(const union arg *arg)
-{
-	struct win *mw, *w;
-
-	mw = &ctab->mw;
-	w = &ctab->tmpw;
-
-	if (ctab->w == &ctab->tmpw || ctab->enable_tmpw) {
-		ctab->enable_tmpw = 0;
-		update_tab_wins(ctab);
-		xfocus_win(mw);
-		return;
-	}
-
-	memcpy(w, mw, sizeof(*w));
-
-	ctab->enable_tmpw = 1;
-	update_tab_wins(ctab);
-
-	/* it will call toggle_tmp_win(),
-	 * so ctab->enable_tmp must be set before */
-	xfocus_win(w);
-}
-
-void
-undo(const union arg *arg)
-{
-	struct edit e;
-	struct fbuf *fb = ctab->w->p.fb;
-	struct undo *u = undoof(fb->undo.end);
-
-	if (fb->undo.end->prv)
-		fb->undo.end = fb->undo.end->prv;
-
-	e = u->e;
-	str_empty(&u->e.replace);
-
-	edit(NULL, &e);
-
-	fb->undo.end = fb->undo.end->prv;
-}
-
-void
-yank(const union arg *arg)
-{
-	int beg_bcol, end_bcol;
-	struct str buf;
-	struct line_iter iter;
-
-	str_empty(&buf);
-	init_line_iter(&iter, &SEL_MARKER, &ctab->w->p);
-
-	while (iter_lines(&iter)) {
-		beg_bcol = col2bcol(iter.l, iter.beg);
-		end_bcol = col2bcol(iter.l, iter.end);
-		estr_append_str(&buf, &STR(iter.l->s.s + beg_bcol, end_bcol - beg_bcol));
-	}
-
-	dup_to_reg('+', buf.s);
-}
-
-/* command functions */
-void
-cmd_buffer(int argc, const char *argv[])
-{
-	struct fbuf *fb;
-	int idx, width;
-	struct line *l;
-
-	if (argc > 1 && argv[1]) {
-		if (*argv[1] == '#' && ctab->w->prv_fb) {
-			fb = ctab->w->prv_fb;
-			goto goto_fb;
-		}
-		if ((idx = atoi(argv[1])) > fbs.n - 1)
-			return;
-		if (idx < 0)
-			return;
-		fb = fbs.e[idx];
-		fb->pos.fb = fb;
-goto_fb:
-		xgoto_mark(ctab->w, &fb->pos);
-		return;
-	}
-
-	xfocus_win(&ctab->tmpw);
-
-	fb = tmp_fbuf();
-
-	width = snprintf(sbuf, sizeof(sbuf), "%d", fbs.n - 1);
-
-	for (int i = 0; i < fbs.n - 1; i++, fb->nline++) {
-		l = ecalloc(1, sizeof(*l));
-		str_empty(&l->s);
-		estr_expand_siz(&l->s, width + strlen(fbs.e[i]->path) + 16);
-		l->s.len = snprintf(l->s.s, l->s.siz, "%-*d\"%s\"\n",
-				width + 2, i, fbs.e[i]->path);
-		list_insert(&fb->lines, fb->lines.end, &l->link);
-	}
-
-	xgoto_mark(ctab->w, &fb->pos);
-}
-
-void
-cmd_edit(int argc, const char *argv[])
-{
-	struct fbuf *fb;
+	Buf *b;
 	FILE *fp;
-	struct line *l;
-	int nline;
+	Line *l;
 
-	if (argc > 1 && argv) {
-		for (int i = 0; i < fbs.n; i++) {
-			if (strcmp(fbs.e[i]->path, argv[1]) == 0) {
-				fb = fbs.e[i];
-				goto setwin;
-			}
+	if (argc > 1) {
+		strmatch(argv[1], int, i, bufs.n, bufs.e[i]->path) {
+			b = bufs.e[i];
+			goto setwin;
 		}
 	}
 
-	fb = ecalloc(1, sizeof(*fb));
-	darr_append(&fbs, fb);
+	b = ecalloc(1, sizeof(*b));
+	list_init(&b->lines);
+	list_init(&b->undos);
 
-	if (argc <= 1) {
-		fb->name = fb->_name = strdup("<unnamed>");
-		strcpy(fb->path, fb->name);
+	if (argc > 1) {
+		strcpy(b->path, argv[1]);
+		if ((fp = fopen(argv[1], "r"))) {
+			for (; (l = freadline(fp)); b->nline++)
+				list_insert(&b->lines, b->lines.end, &l->link);
+		}
 	} else {
-		fb->_name = strdup(argv[1]);
-		fb->name = basename(fb->_name);
-		strcpy(fb->path, argv[1]);
+		strcpy(b->path, "<unnamed>");
 	}
 
-	if (argc <= 1 || !(fp = fopen(argv[1], "r"))) {
-		empty_fbuf(fb);
-		goto setwin;
-	}
-
-	list_init(&fb->lines);
-	list_init(&fb->undo);
-	for (nline = 0; fgets(sbuf, BUFSIZ, fp); nline++) {
+	if (!b->lines.beg) {
 		l = ecalloc(1, sizeof(*l));
-		estr_from_cstr(&l->s, sbuf);
-		list_insert(&fb->lines, fb->lines.end, &l->link);
+		estr_from_cstr(&l->s, "");
+		list_insert(&b->lines, b->lines.end, &l->link);
+		b->nline = 1;
 	}
-	if (!nline) {
-		l = empty_line();
-		list_insert(&fb->lines, fb->lines.end, &l->link);
-		nline = 1;
-	}
-	fb->nline = nline;
 
-	fclose(fp);
+	darr_append(&bufs, b);
 setwin:
-	fb->pos.fb = fb;
-	xgoto_mark(ctab->w, &fb->pos);
+	ctab->main.b = b;
+	ctab->main.l = lineof(b->lines.beg);
+	ctab->main.row = ctab->main.orow = 0;
+	ctab->main.rowoff = ctab->main.coloff = 0;
+	ctab->main.col = ctab->main.ocol = 0;
 }
 
 void
-cmd_goto_line(int argc, const char *argv[])
+cmdquit(int argc, const char *argv[])
 {
-	const char *c = argv[0];
-	int row = 0;
-	for (; *c; c++) {
-		if (*c < '0' || *c > '9')
+	for (int i = 0; i < bufs.n; i++)
+		if (bufs.e[i]->modified)
 			return;
-		row *= 10;
-		row += *c - '0';
-	}
-	if (c != argv[0])
-		set_row(ctab->w, row == 0 ? row : row - 1);
+	running = 0;
 }
 
 void
-cmd_marks(int argc, const char *argv[])
-{
-	struct fbuf *fb;
-	struct line *l;
-
-	xfocus_win(&ctab->tmpw);
-
-	fb = tmp_fbuf();
-
-	for (int i = 0; i < (int)LENGTH(markers); i++, fb->nline++) {
-		if (!markers[i].fb) {
-			fb->nline--;
-			continue;
-		}
-		l = ecalloc(1, sizeof(*l));
-		str_empty(&l->s);
-		estr_expand_siz(&l->s, strlen(markers[i].fb->path) + 64);
-		l->s.len = snprintf(l->s.s, l->s.siz, "%c \"%s\":%d,%d\n",
-				get_marker_chr(i),
-				markers[i].fb->path,
-				markers[i].row, markers[i].col);
-		list_insert(&fb->lines, fb->lines.end, &l->link);
-	}
-
-	xgoto_mark(ctab->w, &fb->pos);
-
-	if (fb->nline == 0)
-		cmd_quit(0, NULL);
-}
-
-void
-cmd_write(int argc, const char *argv[])
+cmdwrite(int argc, const char *argv[])
 {
 	FILE *fp;
 	const char *path;
 
 	if (argc <= 1 || !argv[1])
-		path = ctab->w->p.fb->path;
+		path = cwin->b->path;
 	else
 		path = argv[1];
 
 	if (!(fp = fopen(path, "w")))
 		return;
 
-	list_for_each(struct line, l, ctab->w->p.fb->lines.beg, tmp, link)
+	list_for_each(Line, l, cwin->b->lines.beg, tmp, link) {
 		fputs(l->s.s, fp);
+		fputc('\n', fp);
+	}
 
 	fclose(fp);
+
+	cwin->b->modified = 0;
+}
+
+unsigned int
+coltobcol(Line *l, unsigned int col)
+{
+	unsigned int bcol = 0;
+	for (; col; col--)
+		bcol += grapheme_next_character_break_utf8(l->s.s + bcol, l->s.len - bcol);
+	return bcol;
 }
 
 void
-cmd_quit(int argc, const char *argv[])
+delete(const Arg *arg)
 {
-	struct fbuf *fb;
-	int using = 0;
-
-	if (ctab->w == &ctab->mw) {
-		running = 0;
-		return;
+	Edit e = {0}, *ue;
+	e.beg.col = cwin->col;
+	e.beg.row = cwin->row;
+	if (selected) {
+		e.end = SELMARK.p;
+	} else {
+		e.end = e.beg;
+		e.end.col++;
 	}
-
-	toggle_tmp_win(0);
-
-	fb = ctab->tmpw.p.fb;
-	if (!fb->tmp)
-		return;
-
-	for (int i = 0; i < tabs.n; i++) {
-		using += tabs.e[i]->mw.p.fb == fb;
-		using += tabs.e[i]->tmpw.p.fb == fb;
-	}
-
-	if (using > 1)
-		return;
-
-	remove_fbuf(fb);
+	ue = edit(&e);
+	duptoreg(arg->i, &ue->replace);
 }
 
 void
-cmd_shell(int argc, const char *argv[])
+draw(void)
 {
-	struct fbuf *fb;
-	int fds[2];
+	if (cmode == ModeC || cmode == ModeF)
+		drawcmdline();
+	else
+		drawbar();
+	drawwin(&ctab->main);
+	if (ctab->bottom.h)
+		drawwin(&ctab->bottom);
+	sctui_move(cwin->x + getrx(cwin->l, cwin->col),
+			cwin->y + cwin->row - cwin->rowoff);
+	sctui_commit();
+}
 
-	if (pipe(fds) < 0)
-		die("pipe()");
+void
+drawbar(void)
+{
+	int i;
+	size_t off, ret;
+	Uchr uc;
 
-	if (fork() == 0) {
-		close(fds[0]);
-		if (dup2(fds[1], STDOUT_FILENO) < 0)
-			die("dup2()");
-		if (dup2(STDOUT_FILENO, STDERR_FILENO) < 0)
-			die("dup2()");
-		close(fds[1]);
-		execvp(argv[1], (char**)(argv + 1));
-		die("execvp()");
+	estr_append_cstr(&barbuf, modestr[cmode]);
+	estr_append_chr(&barbuf, ' ');
+	estr_append_cstr(&barbuf, cwin->b->path);
+	estr_append_chr(&barbuf, ' ');
+	if (cwin->b->modified)
+		estr_append_chr(&barbuf, 'm');
+	else
+		estr_append_chr(&barbuf, '-');
+	estr_append_chr(&barbuf, ' ');
+	snprintf(sbuf, BUFSIZ, "%u,%u", cwin->row + 1, cwin->col + 1);
+	estr_append_cstr(&barbuf, sbuf);
+	estr_append_chr(&barbuf, ' ');
+	for (i = 0; i < skb_ncombo; i++)
+		sbuf[i] = (char)skb_combo[i];
+	sbuf[i] = '\0';
+	for (off = 0; (ret = renderchr(&uc, sbuf + off)) > 0; off += ret)
+		estr_append_str(&barbuf, &STR(sbuf + off, uc.blen));
+
+	sctui_out(sctui_attr_on(barattr), 0);
+	sctui_move(0, scrh);
+	drawline(&barbuf, scrw, -1, -1);
+	sctui_out(sctui_attr_off(), 0);
+
+	estr_clean(&barbuf);
+}
+
+void
+drawcmdline(void)
+{
+	drawwin(&cmdline);
+}
+
+void
+drawline(struct str *s, unsigned int w, int selbeg, int selend)
+{
+	int i;
+	unsigned int wsum = 0;
+	size_t ret, off;
+	Uchr uc;
+
+	for (i = off = 0; (ret = renderchr(&uc, s->s + off)) > 0; off += ret, i++) {
+		if (i == selbeg && selend != 0)
+			sctui_out(sctui_attr_on(selattr), 0);
+		else if (i == selend)
+			sctui_out(sctui_attr_off(), 0);
+		wsum += uc.w;
+		if (wsum > w)
+			return;
+		sctui_out(rbuf, uc.blen);
 	}
 
-	close(fds[1]);
+	for (unsigned int c = w - wsum; c; c--, i++) {
+		if (i == selend)
+			sctui_out(sctui_attr_off(), 0);
+		sctui_outc(' ');
+	}
+}
 
-	fb = poll_fbuf(fds[0], NULL);
-	xfocus_win(&ctab->tmpw);
-	xgoto_mark(ctab->w, &fb->pos);
+void
+drawwin(Win *w)
+{
+	/* shits, don't read it */
+	Line *d = getln(w->l, w->row, w->rowoff);
+	LineIter iter;
+	unsigned int nl;
+	int s = selected && w->b == SELMARK.b, selbeg, selend;
+	Pos _beg = SELMARK.p, _end, *beg = &_beg, *end = &_end;
+
+	if (s) {
+		_end.row = w->row;
+		_end.col = w->col;
+		swappos(&beg, &end);
+		iter.beg = *beg;
+		iter.end = *end;
+		iter.lrow = w->rowoff;
+	}
+
+	for (nl = 0; nl < w->h; nl++, d = lineof(d->link.nex), iter.lrow++) {
+		sctui_move(w->x, w->y + nl);
+		iter.l = iter.nex = d;
+		if (s && iterln(&iter)) {
+			selbeg = iter.lstart;
+			selend = iter.lend;
+		} else {
+			selbeg = selend = -1;
+		}
+		drawline(&d->s, w->w, selbeg, selend);
+		if (!d->link.nex)
+			break;
+	}
+
+	sctui_fill_space(rbuf, 0, w->w);
+	for (nl++; nl < w->h; nl++) {
+		sctui_move(w->x, w->y + nl);
+		sctui_out(rbuf, 0);
+	}
+}
+
+void
+duptoreg(int idx, struct str *s)
+{
+	char **reg = &regs[idx];
+	if (*reg)
+		free(*reg);
+	*reg = strndup(s->s, s->len);
+
+	if (idx == '+')
+		clipboard_set(s);
+}
+
+/* it returns a reverse edit operation,
+ * __Don't free() it__ */
+Edit *
+edit(const Edit *e)
+{
+	Undo *u = newundo(cwin->b);
+	Pos _beg = e->beg, _end = e->end, *beg = &_beg, *end = &_end;
+
+	swappos(&beg, &end);
+
+	setrow(cwin, beg->row);
+	cwin->row = beg->row;
+	cwin->col = beg->col;
+
+	u->e.beg = u->e.end = *beg;
+	if (beg->row == end->row)
+		eremove(&u->e.replace, beg->col, end->col);
+	else
+		eremovem(&u->e.replace, beg, end);
+
+	if (e->replace.s) {
+		einsert(&e->replace);
+		str_empty(&u->e.replace);
+		u->e.end.row = cwin->row;
+		u->e.end.col = cwin->col;
+	}
+
+	if (e->setcursor) {
+		setrow(cwin, e->cursor.row);
+		cwin->col = e->cursor.col;
+	}
+
+	if (cmode == ModeV)
+		mode(&ARG(.i = ModeN));
+	if (selected)
+		selected = 0;
+
+	cwin->b->modified = 1;
+
+	return &u->e;
+}
+
+void
+einsert(const struct str *content)
+{
+	unsigned int bcol = coltobcol(cwin->l, cwin->col);
+	const char *s = content->s;
+	struct str tmp, save = {0};
+
+	estr_from_cstr(&save, cwin->l->s.s + bcol);
+	estr_remove(&cwin->l->s, bcol, cwin->l->s.len - bcol);
+
+	while ((s = iterstr(&tmp, s))) {
+		if (tmp.len == 1 && tmp.s[0] == '\n') {
+			cwin->orow = ++cwin->row;
+			cwin->col = 0;
+			cwin->l = enewline(cwin->b, cwin->l);
+		} else {
+			estr_append_str(&cwin->l->s, &tmp);
+			cwin->col += tmp.len;
+		}
+	}
+
+	if (save.s)
+		estr_append_str(&cwin->l->s, &save);
+
+	str_free(&save);
+}
+
+/* l1 -> l2
+ * l1 -> l3 -> l2 (insert l3 at l1) */
+Line *
+enewline(Buf *b, Line *at)
+{
+	Line *l = ecalloc(1, sizeof(*l));
+	list_insert(&b->lines, &at->link, &l->link);
+	b->nline++;
+	return l;
+}
+
+void
+eremove(struct str *backup, unsigned int beg, unsigned int end)
+{
+	unsigned int bbeg, bend;
+	Pos fbeg, fend; /* fake */
+	Line *l = cwin->l;
+
+	if (beg == end)
+		return;
+
+	if (selected == 2 || (end > ustrlen(l->s.s) && l->link.nex)) {
+		fbeg.row = cwin->row;
+		fbeg.col = cwin->col;
+		fend.row = fbeg.row + 1;
+		fend.col = 0;
+		eremovem(backup, &fbeg, &fend);
+		return;
+	}
+	bbeg = coltobcol(l, beg);
+	bend = coltobcol(l, end);
+	if (backup)
+		estr_from_str(backup, &STR(l->s.s + bbeg, bend - bbeg));
+	estr_remove(&l->s, bbeg, bend - bbeg);
+}
+
+void
+eremovem(struct str *backup, Pos *beg, Pos *end)
+{
+	unsigned int bcol = coltobcol(cwin->l, cwin->col);
+	Line *begln = cwin->l, *l, *nex;
+
+	if (backup) {
+		estr_from_str(backup, &STR(begln->s.s + bcol, begln->s.len - bcol));
+		estr_append_chr(backup, '\n');
+	}
+	estr_remove(&begln->s, bcol, begln->s.len - bcol);
+
+	l = nex = lineof(begln->link.nex);
+	for (unsigned int lrow = beg->row + 1; lrow != end->row; lrow++) {
+		nex = lineof(l->link.nex);
+		if (backup) {
+			estr_append_str(backup, &l->s);
+			estr_append_chr(backup, '\n');
+		}
+		removeln(cwin->b, l);
+		l = nex;
+	}
+
+	/* l == e->end.row */
+	bcol = coltobcol(l, end->col);
+	if (bcol < l->s.len)
+		estr_append_cstr(&begln->s, l->s.s + bcol);
+	if (backup)
+		estr_append_str(backup, &STR(l->s.s, bcol));
+	removeln(cwin->b, l);
+}
+
+void
+findnex(const Arg *arg)
+{
+	uint_least32_t cp;
+	Line *oln = cwin->l;
+	int k = arg->i;
+	size_t ret, off;
+
+	if (k == 0)
+		k = pollkey();
+
+	mark(&ARG(.i = '\''));
+	selected = 1;
+
+	off = coltobcol(cwin->l, cwin->col);
+	while (1) {
+		grapheme_decode_iter(cwin->l->s.s, ret, off, cp) {
+			if ((int)cp == k)
+				goto found;
+			cwin->col++;
+		}
+		if (!findpassthrough || cwin->row >= cwin->b->nline - 1) {
+			cwin->col = cwin->ocol;
+			cwin->row = cwin->orow;
+			cwin->l = oln;
+			return;
+		}
+		off = 0;
+		cwin->row++;
+		cwin->col = 0;
+		cwin->l = lineof(cwin->l->link.nex);
+	}
+found:
+	cwin->orow = cwin->row;
+	cwin->ocol = ++cwin->col;
+}
+
+void
+findprv(const Arg *arg)
+{
+	unsigned int col, found;
+	uint_least32_t cp;
+	Line *oln = cwin->l;
+	int k = arg->i;
+	size_t ret, off;
+
+	if (k == 0)
+		k = pollkey();
+
+	mark(&ARG(.i = '\''));
+	selected = 1;
+
+	while (1) {
+		cwin->col = found = off = 0;
+		grapheme_decode_iter(cwin->l->s.s, ret, off, cp) {
+			if ((int)cp == k) {
+				col = cwin->col;
+				found = 1;
+			}
+			if (cwin->col >= cwin->ocol && cwin->row == cwin->orow) {
+				if (found)
+					goto found;
+				break;
+			}
+			cwin->col++;
+		}
+		if (found && cwin->row != cwin->orow)
+			goto found;
+		found = 0;
+		if (!findpassthrough || cwin->row == 0) {
+			cwin->col = cwin->ocol;
+			cwin->row = cwin->orow;
+			cwin->l = oln;
+			return;
+		}
+		cwin->row--;
+		cwin->col = 0;
+		cwin->l = lineof(cwin->l->link.prv);
+	}
+found:
+	cwin->orow = cwin->row;
+	cwin->ocol = cwin->col = col;
+}
+
+Line *
+freadline(FILE *fp)
+{
+	Line *l = ecalloc(1, sizeof(*l));
+	struct str s;
+
+	while (fgets(sbuf, BUFSIZ, fp)) {
+		estr_from_cstr(&s, sbuf);
+		if (l->s.s) {
+			estr_append_str(&l->s, &s);
+			str_free(&s);
+		} else {
+			l->s = s;
+		}
+		if (l->s.s[l->s.len - 1] == '\n')
+			break;
+	}
+	if (!l->s.s) {
+		free(l);
+		return NULL;
+	}
+	if (l->s.s[l->s.len - 1] == '\n')
+		estr_remove(&l->s, l->s.len - 1, 1);
+	return l;
+}
+
+Line *
+getln(Line *curl, unsigned int crow, unsigned int row)
+{
+	struct utilsh_list *link = &curl->link;
+	for (unsigned int r = crow; r < row; r++)
+		link = link->nex;
+	for (unsigned int r = crow; r > row; r--)
+		link = link->prv;
+	return lineof(link);
+}
+
+unsigned int
+getrx(Line *l, unsigned int col)
+{
+	unsigned int i, rx;
+	size_t ret, off;
+	Uchr uc;
+
+	i = rx = 0;
+
+	for (off = 0; (ret = renderchr(&uc, l->s.s + off)) > 0; off += ret) {
+		if (i >= col)
+			break;
+		rx += uc.w;
+		i++;
+	}
+
+	return rx;
+}
+
+void
+gotoinfile(const Arg *arg)
+{
+	selected = 0;
+	if (arg->i < 0)
+		cwin->row = 0;
+	else
+		cwin->row = cwin->b->nline - 1;
+}
+
+void
+gotoinline(const Arg *arg)
+{
+	switch (arg->i) {
+	case -1:
+		mark(&ARG(.i = '\''));
+		cwin->col = 0;
+		break;
+	case 1:
+		mark(&ARG(.i = '\''));
+		cwin->col = ustrlen(cwin->l->s.s);
+		break;
+	}
+	selected = 1;
+}
+
+void
+gotomark(const Arg *arg)
+{
+	int k = arg->i;
+	Mark *m;
+	if (k == 0)
+		k = pollkey();
+	m = &marks[k];
+	if (!m->b)
+		return;
+	cwin->b = m->b;
+	cwin->row = cwin->orow = m->p.row;
+	cwin->col = cwin->ocol = m->p.col;
+	cwin->rowoff = m->rowoff;
+	cwin->coloff = m->coloff;
+	cwin->l = m->l;
+}
+
+void
+handlekey(void)
+{
+	char *buf = sbuf;
+	int ret = skb_keypress(keyev, keys[cmode]);
+
+	keyev = 0;
+	switch (ret) {
+	case -1:
+		if (!caninsert())
+			goto drop;
+		for (int i = 0; i < skb_ncombo; i++, buf++) {
+			if (iscntrl(skb_combo[i]) && !strchr("\t\n", skb_combo[i]))
+				goto drop;
+			*buf = skb_combo[i];
+		}
+		for (int l = utf8_blen(buf[-1]) - 1; l > 0; l--, buf++)
+			*buf = sctui_grab_key();
+		*buf = 0;
+		skb_dropcombo();
+		insert(&ARG(.s = sbuf));
+		break;
+	case 0:
+		return;
+	case 1:
+		break;
+	}
+drop:
+	skb_dropcombo();
+}
+
+void
+initcmdbuf(void)
+{
+	Line *l = ecalloc(1, sizeof(*l));
+	estr_from_cstr(&l->s, "");
+	list_init(&cmdbuf.lines);
+	list_insert(&cmdbuf.lines, cmdbuf.lines.end, &l->link);
+	cmdbuf.nline = 1;
+}
+
+void
+insert(const Arg *arg)
+{
+	Edit e = {0};
+	e.beg.row = cwin->row;
+	e.beg.col = cwin->col;
+	e.end = e.beg;
+	e.replace.s = (char *)arg->s;
+	e.replace.len = strlen(arg->s);
+
+	edit(&e);
+}
+
+Line *
+iterln(LineIter *li)
+{
+	if (li->nex == NULL)
+		return NULL;
+
+	/* not the begging */
+	if (li->l != li->nex)
+		li->lrow++;
+
+	li->l = li->nex;
+	if (li->lrow < li->beg.row || li->lrow > li->end.row) {
+		return NULL;
+	} else if (li->beg.row == li->end.row) {
+		if (li->beg.col == li->end.col)
+			return NULL;
+		li->lstart = li->beg.col;
+		li->lend = li->end.col;
+		goto end;
+	} else if (li->lrow == li->beg.row) {
+		li->lstart = li->beg.col;
+		li->lend = ustrlen(li->l->s.s) + 1;
+	} else if (li->lrow == li->end.row) {
+		if (li->end.col == 0)
+			return NULL;
+		li->lstart = 0;
+		li->lend = li->end.col;
+		goto end;
+	} else {
+		li->lstart = 0;
+		li->lend = ustrlen(li->l->s.s) + 1;
+	}
+
+	li->nex = lineof(li->l->link.nex);
+	return li->l;
+end:
+	if (selected == 2)
+		li->lend += 1;
+	li->nex = NULL;
+	return li->l;
+}
+
+const char *
+iterstr(struct str *result, const char *str)
+{
+	result->s = (char*)str;
+	for (; *str && *str != '\n'; str++);
+	result->len = result->siz = str - result->s;
+	if (result->len == 0) {
+		if (*str != '\n')
+			return NULL;
+		str++;
+		result->len = result->siz = 1;
+	}
+	return str;
+}
+
+void
+makelniter(LineIter *li, Pos *beg, Pos *end)
+{
+	swappos(&beg, &end);
+
+	li->beg = *beg;
+	li->end = *end;
+
+	li->l = li->nex = getln(cwin->l, cwin->row, li->beg.row);
+	li->lrow = li->beg.row;
+}
+
+void
+mark(const Arg *arg)
+{
+	int k = arg->i;
+	Mark *m;
+	if (k == 0)
+		k = pollkey();
+	m = &marks[k];
+	m->b = cwin->b;
+	m->l = cwin->l;
+	m->p.row = cwin->row;
+	m->p.col = cwin->col;
+	m->rowoff = cwin->rowoff;
+	m->coloff = cwin->coloff;
+}
+
+const Cmd *
+matchcmd(const char *name)
+{
+	for (const Cmd *c = cmds; c->name; c++) {
+		if (strcmp(c->name, name) == 0)
+			return c;
+	}
+	return NULL;
+}
+
+void
+mode(const Arg *arg)
+{
+	int omode = cmode;
+	cmode = arg->i;
+	switch (cmode) {
+	case ModeC: case ModeF:
+		ctab->ow = cwin;
+		cwin = &cmdline;
+		cwin->col = 0;
+		estr_clean(&cmdline.l->s);
+		break;
+	case ModeV:
+		if (!selected)
+			mark(&ARG(.i = '\''));
+		break;
+	default:
+		switch (omode) {
+		case ModeC: case ModeF:
+			cwin = ctab->ow;
+			break;
+		case ModeV:
+			selected = 0;
+			break;
+		}
+		break;
+	}
+}
+
+void
+movedown(const Arg *arg)
+{
+	selected = 0;
+	if (arg->i < 0 && cwin->row < (unsigned int)-arg->i)
+		cwin->row = 0;
+	else
+		cwin->row += arg->i;
+	if (cwin->row >= cwin->b->nline)
+		cwin->row = cwin->b->nline - 1;
+}
+
+void
+moveright(const Arg *arg)
+{
+	selected = 0;
+	if (cwin->col == 0 && arg->i < 0)
+		return;
+	cwin->col += arg->i;
+}
+
+void
+newline(const Arg *arg)
+{
+	Edit e = {0};
+	e.beg.row = cwin->row;
+	if (arg->i < 0) {
+		e.beg.col = 0;
+		e.cursor = e.beg;
+		e.setcursor = 1;
+	} else {
+		e.beg.col = ustrlen(cwin->l->s.s) + 1;
+	}
+	e.end = e.beg;
+	estr_from_cstr(&e.replace, "\n");
+	edit(&e);
+	str_free(&e.replace);
+}
+
+void
+newtab(const Arg *arg)
+{
+	darr_expand(&tabs);
+	ctab = &darr_last(&tabs);
+	memset(ctab, 0, sizeof(*ctab));
+	cwin = &ctab->main;
+	cwin->x = cwin->y = 0;
+	cwin->h = scrh - 1;
+	cwin->w = scrw;
+
+	if (!arg || !arg->s)
+		return;
+
+	cmdedit(ARGCV("e", arg->s));
+}
+
+Undo *
+newundo(Buf *b)
+{
+	Undo *u;
+
+	if (b->undos.end) {
+		if (b->undos.end->nex) {
+			b->undos.end = b->undos.end->nex;
+			goto set;
+		}
+	} else {
+		if (b->undos.beg) {
+			b->undos.end = b->undos.beg;
+			goto set;
+		}
+	}
+
+	u = ecalloc(1, sizeof(*u));
+	list_insert(&b->undos, b->undos.end, &u->link);
+	return u;
+set:
+	return undoof(b->undos.end);
+}
+
+void
+nexmatch(const Arg *arg)
+{
+	Pos beg, end;
+	unsigned int off = 0, orow = cwin->row;
+	Line *oln = cwin->l;
+
+	if (!patterncomped)
+		return;
+
+	if (!(matched && RANGE(matched, cwin->l->s.s, cwin->l->s.s + cwin->l->s.len)))
+		matched = cwin->l->s.s;
+	while (1) { 
+		if (!regexec(&pattern, matched, 1, matches, 0))
+			goto matched;
+		movedown(&ARG(.i = arg->i));
+		if (cwin->orow == cwin->row)
+			break;
+		cwin->l = getln(cwin->l, cwin->orow, cwin->row);
+		cwin->orow = cwin->row;
+		matched = cwin->l->s.s;
+	}
+
+	matched = NULL;
+	cwin->row = cwin->orow = orow;
+	cwin->l = oln;
+	return;
+matched:
+	beg.row = end.row = cwin->row;
+	if (matched != cwin->l->s.s)
+		off = matched - cwin->l->s.s;
+	beg.col = bcoltocol(cwin->l, matches[0].rm_so + off);
+	end.col = bcoltocol(cwin->l, matches[0].rm_eo + off);
+	sel(&beg, &end);
+	matched = cwin->l->s.s + matches[0].rm_eo + off;
+}
+
+void
+paste(const Arg *arg)
+{
+	Edit e = {0};
+	char *str = regs[arg->i];
+	struct str tmp;
+	if (arg->i == '+' && !clipboard_get(&tmp))
+		str = tmp.s;
+
+	if (cmode != ModeV && str) {
+		insert(&ARG(.s = str));
+		return;
+	}
+
+	e.beg.row = cwin->row;
+	e.beg.col = cwin->col;
+	e.end = SELMARK.p;
+	e.replace.s = str;
+	if (str)
+		e.replace.len = strlen(str);
+	edit(&e);
+}
+
+void
+pollev(void)
+{
+	keyev = 0;
+	if (poll(pfds.e, pfds.n, -1) == -1 && errno != EINTR)
+		die("poll()");
+	if (pfds.e[0].revents & POLLIN)
+		keyev = sctui_grab_key();
+}
+
+int
+pollkey(void)
+{
+	keyev = 0;
+	draw();
+	while (!keyev)
+		pollev();
+	return keyev;
+}
+
+void
+redo(const Arg *arg)
+{
+	Edit e;
+	struct utilsh_list_head *undos = &cwin->b->undos;
+	Undo *u;
+
+	if (undos->end) {
+		if (!undos->end->nex)
+			return;
+		u = undoof(undos->end->nex);
+	} else {
+		if (!undos->beg)
+			return;
+		u = undoof(undos->beg);
+	}
+
+	e = u->e;
+	edit(&e);
+	undos->end = &u->link;
+}
+
+void
+removeln(Buf *b, Line *l)
+{
+	list_remove(&b->lines, &l->link);
+	str_free(&l->s);
+	free(l);
+	b->nline--;
+}
+
+size_t
+renderchr(Uchr *uc, const char *s)
+{
+	size_t ret = grapheme_decode_utf8(s, SIZE_MAX, &uc->cp);
+	char *sb = rbuf;
+
+	if (!ret || !uc->cp)
+		return 0;
+
+	uc->blen = ret;
+	if (ret == 1)
+		sb[0] = *s;
+	else
+		strncpy(sb, s, ret);
+
+	switch (uc->cp) {
+	case L'\n':
+		return 0;
+	case L'\t':
+		uc->blen = uc->w = strlen(tabrender);
+		strcpy(sb, tabrender);
+		break;
+	default:
+		if ((uc->w = wcwidth(uc->cp)) <= 0) {
+			uc->w = 2;
+			sb += sprintf(sb, "%s", sctui_attr_on(nonprintattr));
+			toprint(sb, uc->cp);
+			sb += 2;
+			sb += sprintf(sb, "%s", sctui_attr_off());
+			sb += sprintf(sb, "%s", sctui_attr_last());
+			uc->blen = sb - rbuf;
+		}
+		break;
+	}
+
+	return ret;
+}
+
+void
+resize(int sig)
+{
+	sctui_update();
+	cmdline.y = scrh;
+	cmdline.w = scrw;
+	for (int i = 0; i < tabs.n; i++)
+		updatewins(&tabs.e[i]);
+}
+
+/* I don't know why call it "search" but the mode is "find" */
+void
+search(const Arg *arg)
+{
+	char *dup = NULL;
+	int ret;
+
+	if (arg->s) {
+		dup = strdup(arg->s);
+	} else if (cmode == ModeF) {
+		mode(&ARG(.i = ModeN));
+		if (!cmdline.l->s.s[0])
+			return;
+		if (!dup)
+			dup = strdup(cmdline.l->s.s);
+	}
+
+	patterncomped = 0;
+	ret = regcomp(&pattern, dup, 0);
+	free(dup);
+	if (ret)
+		return;
+	patterncomped = 1;
+}
+
+void
+sel(Pos *beg, Pos *end)
+{
+	setrow(cwin, beg->row);
+	setcol(cwin, beg->col);
+	mark(&ARG(.i = '\''));
+	setrow(cwin, end->row);
+	setcol(cwin, end->col);
+	selected = 1;
+}
+
+void
+selline(const Arg *arg)
+{
+	cwin->col = 0;
+	mark(&ARG(.i = '\''));
+	cwin->col = ustrlen(cwin->l->s.s);
+	selected = 2; /* to delete the whole line */
+}
+
+void
+selword(const Arg *arg)
+{
+	unsigned int lstart, lend;
+	TextObj t = {0};
+	t.beg.row = cwin->row;
+	t.beg.col = cwin->col;
+	t.begln = cwin->l;
+	if (!textobj_get(&t, arg->i))
+		return;
+	sel(&t.beg, &t.end);
+	lstart = coltobcol(cwin->l, t.beg.col);
+	lend = coltobcol(cwin->l, t.end.col);
+	search(&ARG(.s = strndup(cwin->l->s.s + lstart, lend - lstart)));
+}
+
+void
+setcol(Win *w, unsigned int col)
+{
+	w->col = align(col, 0, ustrlen(w->l->s.s));
+	if (w->col < w->coloff)
+		w->coloff = w->col;
+	else if (w->col >= w->coloff + scrw)
+		w->coloff = w->col - scrw + 1;
+	w->ocol = w->col;
+}
+
+void
+setrow(Win *w, unsigned int row)
+{
+	w->row = align(row, 0, w->b->nline - 1);
+	if (w->row < w->rowoff)
+		w->rowoff = w->row;
+	else if (w->row >= w->rowoff + w->h)
+		w->rowoff = w->row - w->h + 1;
+	w->l = getln(w->l, w->orow, w->row);
+	setcol(w, w->col);
+	w->orow = w->row;
+}
+
+void
+suspend(const Arg *arg)
+{
+	sctui_fini();
+	sctui_close_alt_screen();
+	sctui_commit();
+	kill(0, SIGSTOP);
+	sctui_init();
+	sctui_open_alt_screen();
+	resize(0);
+	sctui_commit();
+}
+
+void
+swappos(Pos **beg, Pos **end)
+{
+	Pos *b = *beg, *e = *end;
+	if (b->row > e->row
+	|| (b->row == e->row && b->col > e->col)) {
+		*beg = e;
+		*end = b;
+	}
+}
+
+void
+undo(const Arg *arg)
+{
+	Edit e; /* a copy, we need */
+	struct utilsh_list *prv;
+	struct utilsh_list_head *undos = &cwin->b->undos;
+	Undo *u;
+
+	if (!undos->end)
+		return;
+
+	u = undoof(undos->end);
+	undos->end = prv = u->link.prv;
+
+	/* [u->e] will be used by newundo() in edit(), so just copy it */
+	e = u->e;
+	edit(&e);
+
+	undos->end = prv;
+}
+
+void
+update(Tab *t)
+{
+	if (t->bottom.h)
+		setrow(&t->bottom, t->bottom.row);
+	setrow(&t->main, t->main.row);
+}
+
+void
+updatewins(Tab *t)
+{
+	t->main.w = t->bottom.w = scrw;
+	t->main.h = scrh - 1;
+	if (t->bottom.h) {
+		t->bottom.h = t->main.h / 2;
+		t->main.h -= t->bottom.h;
+		t->bottom.y = t->main.h;
+	}
+}
+
+void
+yank(const Arg *arg)
+{
+	Pos beg, end;
+	LineIter iter;
+	unsigned int lstart, lend;
+	struct str tmp;
+
+	if (!selected || cwin->b != SELMARK.b)
+		return;
+
+	str_empty(&tmp);
+
+	beg = SELMARK.p;
+	end.row = cwin->row;
+	end.col = cwin->col;
+	makelniter(&iter, &beg, &end);
+	while (iterln(&iter)) {
+		lstart = coltobcol(iter.l, iter.lstart);
+		lend = coltobcol(iter.l, iter.lend);
+		estr_append_str(&tmp, &STR(iter.l->s.s + lstart, lend - lstart));
+		if (beg.row == end.row)
+			break;
+		if (lend >= iter.l->s.len)
+			estr_append_chr(&tmp, '\n');
+	}
+
+	duptoreg(arg->i, &tmp);
 }
 
 int
 main(int argc, char *argv[])
 {
-	int r;
+	char *entry = NULL;
+	enum GETARG_RESULT r;
+	struct sigaction sa;
 
 	GETARG_BEGIN(r, argc, argv, opts) {
 	case GETARG_RESULT_SUCCESSFUL:
@@ -2010,18 +1478,59 @@ main(int argc, char *argv[])
 		entry = *argv;
 		GETARG_SHIFT(argc, argv);
 		break;
-	case GETARG_RESULT_APPLIED_HELP_OPT:
 	default:
 		return 1;
 	} GETARG_END;
 
-	init();
-	while (running)
-		keypress(request_key());
-	fini();
+	sigemptyset(&sa.sa_mask);
+	sa.sa_flags = SA_NOCLDSTOP | SA_NOCLDWAIT | SA_RESTART;
+	sa.sa_handler = SIG_IGN;
+	sigaction(SIGCHLD, &sa, NULL);
+
+	while (waitpid(-1, NULL, WNOHANG) > 0);
+
+	/* for the fucking wcwidth() */
+	setlocale(LC_ALL, "");
+	sctui_init();
+
+	darr_init(&pfds);
+	darr_expand(&pfds);
+	pfds.e[0].fd = STDIN_FILENO;
+	pfds.e[0].events = POLLIN;
+
+	darr_init(&tabs);
+	newtab(&ARG(.s = entry));
+
+	str_empty(&barbuf);
+
+	initcmdbuf();
+	cmdline.b = &cmdbuf;
+	cmdline.l = lineof(cmdbuf.lines.beg);
+	cmdline.x = 0;
+	cmdline.y = scrh;
+	cmdline.h = 1;
+	cmdline.w = scrw;
+
+	sctui_open_alt_screen();
+
+	LISTEN_SIG(SIGWINCH, SA_RESTART, resize);
+
+	running = 1;
+	while (running) {
+		draw();
+		pollev();
+		handlekey();
+		/* keep [selected] */
+		if (cmode == ModeV)
+			selected = 1;
+		update(ctab);
+	}
+
+	sctui_close_alt_screen();
+	sctui_commit();
+	sctui_fini();
 
 	return 0;
 }
 
-#define SKB_IMPL
-#include "skb.h"
+#include "textobj.c" /* sucks */

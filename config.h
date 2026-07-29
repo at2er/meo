@@ -1,107 +1,131 @@
-static const char **
-sys_copy_cmd()
-{
-	static const char *c[] = {"wl-copy", NULL};
-	if (!getenv("WAYLAND_DISPLAY"))
-		return NULL;
-	return c;
-}
+static int barattr = 0;
+static unsigned int findpassthrough = 1;
+static int nonprintattr = SCTUI_REVERSE;
+static int selattr = SCTUI_REVERSE;
 
-static const char **
-sys_paste_cmd()
-{
-	static const char *c[] = {"wl-paste", "-n", NULL};
-	if (!getenv("WAYLAND_DISPLAY"))
-		return NULL;
-	return c;
-}
+static const char *tabrender = "        ";
 
-static const int sel_attr = SCTUI_REVERSE;
-static const int bar_attr = 0;
-
-static const char *tab_render = "        ";
-
-static const char *mode_str[] = {
-	[MODE_NOR]    = NULL,
-	[MODE_INS]    = "-- INS --",
-	[MODE_CMD]    = NULL,
-	[MODE_SEARCH] = NULL,
+static const char *modestr[] = {
+	[ModeN] = "-",
+	[ModeC] = "C",
+	[ModeF] = "F",
+	[ModeI] = "I",
+	[ModeV] = "V",
 	NULL
 };
 
-static const struct key normal_keys[] = {
-	/* key   func         arg               */
-	{"b",    sel_word,    {.i = -1}          },
-	{"c",    change,      {0}                },
-	{"d",    delete,      {0}                },
-	{"f",    find_nex,    {.i = 1}           },
-	{"F",    find_prv,    {.i = 1}           },
-	{"gg",   goto_beg,    {.i = GOTO_IN_FILE}},
-	{"gG",   goto_end,    {.i = GOTO_IN_FILE}},
-	{"gh",   goto_beg,    {.i = GOTO_IN_LINE}},
-	{"gl",   goto_end,    {.i = GOTO_IN_LINE}},
-	{"G",    goto_end,    {.i = GOTO_IN_FILE}},
-	{"h",    move_col,    {.i = -1}          },
-	{"j",    move_row,    {.i =  1}          },
-	{"k",    move_row,    {.i = -1}          },
-	{"l",    move_col,    {.i =  1}          },
-	{"i",    mode,        {.i = MODE_INS}    },
-	{"m",    mark,        {0}                },
-	{"n",    search,      {.i =  1}          },
-	{"N",    search,      {.i = -1}          },
-	{"o",    new_line,    {.i =  1}          },
-	{"O",    new_line,    {.i = -1}          },
-	{"p",    paste,       {.s = "+"   }      },
-	{"P",    paste,       {.s = "+P"  }      },
-	{"u",    undo,        {0}                },
-	{"r",    redo,        {0}                },
-	{"v",    sel,         {0}                },
-	{"w",    sel_word,    {.i = 1}           },
-	{"x",    swap_sel,    {0}                },
-	{"y",    yank,        {.i = '+'}         },
-	{"'",    goto_mark,   {0}                },
-	{"//",   mode,        {.i = MODE_SEARCH} },
-	{":",    mode,        {.i = MODE_CMD}    },
-	{"^d",   move_row,    {.i =  10}         },
-	{"^l",   redraw,      {0}                },
-	{"^u",   move_row,    {.i = -10}         },
-	{"^z",   suspend,     {0}                },
-	{"/sb",  cmd,         {.s = "b #"}       },
-	{"/sww", focus_win,   {.i = FOCUS_PRV}   },
-	{"/swm", focus_win,   {.i = FOCUS_MAIN}  },
-	{"/swt", focus_win,   {.i = FOCUS_TMP}   },
-	{"/sq",  cmd,         {.s = "quit"}      },
-	{NULL,   NULL,        {0}                }
+#define KBS  127
+#define KCR  13
+#define KESC 27
+/* Maybe you need to use KCR */
+#define KLF  10
+
+static const struct key keys_n[] = {
+	{ { 'b'       }, selword,        {.i = -1}     },
+	{ { 'c'       }, change,         {.i = '+'}    },
+	{ { 'd'       }, delete,         {.i = '+'}    },
+	{ { 'f'       }, findnex,        {0}           },
+	{ { 'F'       }, findprv,        {0}           },
+	{ { 'g', 'b'  }, gotoinline,     {.i = -1}     },
+	{ { 'g', 'f'  }, gotoinline,     {.i =  1}     },
+	{ { 'g', 'g'  }, gotoinfile,     {.i = -1}     },
+	{ { 'g', 'l'  }, selline,        {0}           },
+	{ { 'G'       }, gotoinfile,     {.i =  1}     },
+	{ { 'h'       }, moveright,      {.i = -1}     },
+	{ { 'i'       }, mode,           {.i = ModeI}  },
+	{ { 'j'       }, movedown,       {.i =  1}     },
+	{ { 'k'       }, movedown,       {.i = -1}     },
+	{ { 'l'       }, moveright,      {.i =  1}     },
+	{ { 'm'       }, mark,           {0}           },
+	{ { 'n'       }, nexmatch,       {.i =  1}     },
+	{ { 'N'       }, nexmatch,       {.i = -1}     },
+	{ { 'o'       }, newline,        {.i =  1}     },
+	{ { 'O'       }, newline,        {.i = -1}     },
+	{ { 'p'       }, paste,          {.i = '+'}    },
+	{ { 'q'       }, cmd,            {.s = "quit"} },
+	{ { 'r'       }, redo,           {0}           },
+	{ { 'u'       }, undo,           {0}           },
+	{ { 'v'       }, mode,           {.i = ModeV}  },
+	{ { 'w'       }, selword,        {.i =  1}     },
+	{ { 'y'       }, yank,           {.i = '+'}    },
+	{ { ':'       }, mode,           {.i = ModeC}  },
+	{ { '/'       }, mode,           {.i = ModeF}  },
+	{ { '\''      }, gotomark,       {0}           },
+	{ { CTRL('c') }, cmd,            {.s = "quit"} },
+	{ { CTRL('u') }, movedown,       {.i = -10}    },
+	{ { CTRL('d') }, movedown,       {.i =  10}    },
+	{ { CTRL('z') }, suspend,        {0}           },
+	{ {0},           NULL,           {0}           }
 };
 
-static const struct key insert_keys[] = {
-	/* key   func         arg               */
-	{"jk",   mode,        {.i = MODE_NOR}    },
-	{"/b",   backspace,   {.i = 1}           },
-	{"/e",   mode,        {.i = MODE_NOR}    },
-	{"/r",   insert,      {.s = "\n"}        },
-	{"^h",   backspace,   {.i = 1}           },
-	{NULL,   NULL,        {0}                }
+static const struct key keys_c[] = {
+	{ { CTRL('b') }, moveright,      {.i = -1}     },
+	{ { CTRL('c') }, mode,           {.i = ModeN}  },
+	{ { CTRL('f') }, moveright,      {.i =  1}     },
+	{ { CTRL('h') }, backspace,      {0}           },
+	{ { KBS       }, backspace,      {0}           },
+	{ { KESC      }, mode,           {.i = ModeN}  },
+	{ { KLF       }, cmd,            {0}           },
+	{ {0},           NULL,           {0}           }
 };
 
-/* search mode also use this bindings */
-static const struct key cmd_keys[] = {
-	/* key   func         arg               */
-	{"/b",   backspace,   {.i = 1}           },
-	{"/c",   mode,        {.i = MODE_NOR}    },
-	{"/e",   mode,        {.i = MODE_NOR}    },
-	{"/r",   cmd,         {0}                },
-	{"^h",   backspace,   {.i = 1}           },
-	{NULL,   NULL,        {0}                }
+static const struct key keys_f[] = {
+	{ { CTRL('b') }, moveright,      {.i = -1}     },
+	{ { CTRL('c') }, mode,           {.i = ModeN}  },
+	{ { CTRL('f') }, moveright,      {.i =  1}     },
+	{ { CTRL('h') }, backspace,      {0}           },
+	{ { KBS       }, backspace,      {0}           },
+	{ { KLF       }, search,         {0}           },
+	{ { KESC      }, mode,           {.i = ModeN}  },
+	{ {0},           NULL,           {0}           }
 };
 
-static struct cmd cmds[] = {
-	/* cmd       alias   func      */
-	{"buffer",   "b",    cmd_buffer },
-	{"edit",     "e",    cmd_edit   },
-	{"marks",    "ms",   cmd_marks  },
-	{"write",    "w",    cmd_write  },
-	{"quit",     "q",    cmd_quit   },
-	{"shell",    "sh",   cmd_shell  },
-	{NULL,       NULL,   NULL       }
+static const struct key keys_i[] = {
+	{ { 'j', 'k'  }, mode,           {.i = ModeN}  },
+	{ { CTRL('b') }, moveright,      {.i = -1}     },
+	{ { CTRL('c') }, mode,           {.i = ModeN}  },
+	{ { CTRL('f') }, moveright,      {.i =  1}     },
+	{ { CTRL('h') }, backspace,      {0}           },
+	{ { CTRL('n') }, movedown,       {.i =  1}     },
+	{ { CTRL('p') }, movedown,       {.i = -1}     },
+	{ { KBS       }, backspace,      {0}           },
+	{ { KESC      }, mode,           {.i = ModeN}  },
+	{ {0},           NULL,           {0}           }
+};
+
+static const struct key keys_v[] = {
+	{ { 'c'       }, change,         {.i = '+'}    },
+	{ { 'd'       }, delete,         {.i = '+'}    },
+	{ { 'f'       }, findnex,        {0}           },
+	{ { 'F'       }, findprv,        {0}           },
+	{ { 'h'       }, moveright,      {.i = -1}     },
+	{ { 'j'       }, movedown,       {.i =  1}     },
+	{ { 'k'       }, movedown,       {.i = -1}     },
+	{ { 'l'       }, moveright,      {.i =  1}     },
+	{ { 'p'       }, paste,          {.i = '+'}    },
+	{ { 'y'       }, yank,           {.i = '+'}    },
+	{ { CTRL('c') }, mode,           {.i = ModeN}  },
+	{ { KESC      }, mode,           {.i = ModeN}  },
+	{ {0},           NULL,           {0}           }
+};
+
+static const struct key *keys[] = {
+	[ModeN] = keys_n,
+	[ModeC] = keys_c,
+	[ModeF] = keys_f,
+	[ModeI] = keys_i,
+	[ModeV] = keys_v,
+	NULL
+};
+
+static const Cmd cmds[] = {
+	// { "b",     cmdbuf   },
+	// { "buf",   cmdbuf   },
+	{ "e",     cmdedit  },
+	{ "edit",  cmdedit  },
+	{ "q",     cmdquit  },
+	{ "quit",  cmdquit  },
+	{ "w",     cmdwrite },
+	{ "write", cmdwrite },
+	{ NULL,    NULL     }
 };
