@@ -1094,9 +1094,9 @@ newtab(const Arg *arg)
 	cwin->w = scrw;
 
 	if (!arg || !arg->s)
-		return;
-
-	cmdedit(ARGCV("e", arg->s));
+		cmdedit(ARGCV("e"));
+	else
+		cmdedit(ARGCV("e", arg->s));
 }
 
 Undo *
