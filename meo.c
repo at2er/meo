@@ -150,6 +150,7 @@ static Line *getln(Line *curl, unsigned int crow, unsigned int row);
 static unsigned int getrx(Line *l, unsigned int col);
 static void gotoinfile(const Arg *arg);
 static void gotoinline(const Arg *arg);
+static void gotoline(const Arg *arg);
 static void gotomark(const Arg *arg);
 static void handlekey(void);
 static void initcmdbuf(void);
@@ -301,13 +302,12 @@ cmd(const Arg *arg)
 	darr_append(&args, NULL);
 	args.n--;
 
-	if (!(c = matchcmd(args.e[0])))
-		goto clean;
+	if (!(c = matchcmd(args.e[0]))) {
+		gotoline(&ARG(.s = args.e[0]));
+		return;
+	}
 
 	c->func(args.n, (const char **)args.e);
-clean:
-	free(args.e);
-	free(dup);
 }
 
 void
@@ -848,6 +848,21 @@ gotoinline(const Arg *arg)
 }
 
 void
+gotoline(const Arg *arg)
+{
+	const char *c = arg->s;
+	unsigned int row;
+	for (; *c; c++) {
+		if (*c < '0' || *c > '9')
+			return;
+		row *= 10;
+		row += *c - '0';
+	}
+	if (c != arg->s)
+		setrow(cwin, row == 0 ? row : row - 1);
+}
+
+void
 gotomark(const Arg *arg)
 {
 	int k = arg->i;
@@ -1289,9 +1304,9 @@ search(const Arg *arg)
 	char *dup = NULL;
 	int ret;
 
-	if (arg->s) {
+	if (arg->s)
 		dup = strdup(arg->s);
-	} else if (cmode == ModeF) {
+	if (cmode == ModeF) {
 		mode(&ARG(.i = ModeN));
 		if (!cmdline.l->s.s[0])
 			return;
