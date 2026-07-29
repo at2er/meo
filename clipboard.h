@@ -33,6 +33,8 @@ clipboard_get(struct str *s)
 		estr_append_str(s, &STR(CLIPBOARD_READ_BUF, r));
 	close(fds[0]);
 
+	if (!s->s)
+		return 1;
 	return 0;
 }
 

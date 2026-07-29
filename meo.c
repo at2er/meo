@@ -265,7 +265,9 @@ caninsert(void)
 void
 change(const Arg *arg)
 {
-	delete(0);
+	if (selected == 2)
+		selected = 1;
+	delete(arg);
 	mode(&ARG(.i = ModeI));
 }
 
@@ -313,22 +315,34 @@ cmdedit(int argc, const char *argv[])
 	FILE *fp;
 	Line *l;
 
-	strmatch(argv[1], int, i, bufs.n, bufs.e[i]->path) {
-		b = bufs.e[i];
-		goto setwin;
+	if (argc > 1) {
+		strmatch(argv[1], int, i, bufs.n, bufs.e[i]->path) {
+			b = bufs.e[i];
+			goto setwin;
+		}
 	}
 
 	b = ecalloc(1, sizeof(*b));
-	strcpy(b->path, argv[1]);
 	list_init(&b->lines);
 	list_init(&b->undos);
-	if ((fp = fopen(argv[1], "r"))) {
-		for (; (l = freadline(fp)); b->nline++)
-			list_insert(&b->lines, b->lines.end, &l->link);
+
+	if (argc > 1) {
+		strcpy(b->path, argv[1]);
+		if ((fp = fopen(argv[1], "r"))) {
+			for (; (l = freadline(fp)); b->nline++)
+				list_insert(&b->lines, b->lines.end, &l->link);
+		}
 	} else {
-		l = ecalloc(1, sizeof(*l));
-		list_insert(&b->lines, b->lines.end, &l->link);
+		strcpy(b->path, "<unnamed>");
 	}
+
+	if (!b->lines.beg) {
+		l = ecalloc(1, sizeof(*l));
+		estr_from_cstr(&l->s, "");
+		list_insert(&b->lines, b->lines.end, &l->link);
+		b->nline = 1;
+	}
+
 	darr_append(&bufs, b);
 setwin:
 	ctab->main.b = b;
@@ -606,7 +620,7 @@ eremove(struct str *backup, unsigned int beg, unsigned int end)
 	if (beg == end)
 		return;
 
-	if (selected == 2 || end > ustrlen(l->s.s)) {
+	if (selected == 2 || (end > ustrlen(l->s.s) && l->link.nex)) {
 		fbeg.row = cwin->row;
 		fbeg.col = cwin->col;
 		fend.row = fbeg.row + 1;
@@ -1141,7 +1155,7 @@ paste(const Arg *arg)
 	if (arg->i == '+' && !clipboard_get(&tmp))
 		str = tmp.s;
 
-	if (cmode != ModeV) {
+	if (cmode != ModeV && str) {
 		insert(&ARG(.s = str));
 		return;
 	}
@@ -1150,7 +1164,8 @@ paste(const Arg *arg)
 	e.beg.col = cwin->col;
 	e.end = SELMARK.p;
 	e.replace.s = str;
-	e.replace.len = strlen(str);
+	if (str)
+		e.replace.len = strlen(str);
 	edit(&e);
 }
 

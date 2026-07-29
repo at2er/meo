@@ -22,8 +22,8 @@ static const char *modestr[] = {
 
 static const struct key keys_n[] = {
 	{ { 'b'       }, selword,        {.i = -1}     },
-	{ { 'c'       }, change,         {0}           },
-	{ { 'd'       }, delete,         {0}           },
+	{ { 'c'       }, change,         {.i = '+'}    },
+	{ { 'd'       }, delete,         {.i = '+'}    },
 	{ { 'f'       }, findnex,        {0}           },
 	{ { 'F'       }, findprv,        {0}           },
 	{ { 'g', 'b'  }, gotoinline,     {.i = -1}     },
@@ -94,8 +94,8 @@ static const struct key keys_i[] = {
 };
 
 static const struct key keys_v[] = {
-	{ { 'c'       }, change,         {0}           },
-	{ { 'd'       }, delete,         {0}           },
+	{ { 'c'       }, change,         {.i = '+'}    },
+	{ { 'd'       }, delete,         {.i = '+'}    },
 	{ { 'f'       }, findnex,        {0}           },
 	{ { 'F'       }, findprv,        {0}           },
 	{ { 'h'       }, moveright,      {.i = -1}     },

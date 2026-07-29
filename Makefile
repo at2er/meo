@@ -8,7 +8,7 @@ all: meo
 
 %.o: %.c %.h
 	$(CC) -c $(CFLAGS) $< -o $@
-meo.o: textobj.c textobj.h config.h
+meo.o: textobj.c textobj.h clipboard.h config.h
 
 
 meo: $(OBJ) $(wildcard include/*.h)
