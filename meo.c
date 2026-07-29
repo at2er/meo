@@ -1256,9 +1256,9 @@ search(const Arg *arg)
 	char *dup = NULL;
 	int ret;
 
-	if (arg->s)
+	if (arg->s) {
 		dup = strdup(arg->s);
-	if (cmode == ModeF) {
+	} else if (cmode == ModeF) {
 		mode(&ARG(.i = ModeN));
 		if (!cmdline.l->s.s[0])
 			return;
@@ -1297,6 +1297,7 @@ selline(const Arg *arg)
 void
 selword(const Arg *arg)
 {
+	unsigned int lstart, lend;
 	TextObj t = {0};
 	t.beg.row = cwin->row;
 	t.beg.col = cwin->col;
@@ -1304,6 +1305,9 @@ selword(const Arg *arg)
 	if (!textobj_get(&t, arg->i))
 		return;
 	sel(&t.beg, &t.end);
+	lstart = coltobcol(cwin->l, t.beg.col);
+	lend = coltobcol(cwin->l, t.end.col);
+	search(&ARG(.s = strndup(cwin->l->s.s + lstart, lend - lstart)));
 }
 
 void
