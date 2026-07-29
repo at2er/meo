@@ -20,7 +20,7 @@ Try `export LD_LIBRARY_PATH=/usr/local/lib` if your
 libgrapheme was installed in `/usr/local`.
 
 ### wcwidth()
-You need the termux's
+You may need the termux's
 [wcwidth](https://github.com/termux/wcwidth)
 to implement the f**king `wcwidth()`
 

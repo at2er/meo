@@ -81,6 +81,7 @@ typedef struct LineIter {
 
 typedef struct Mark {
 	Buf *b;
+	Line *l;
 	Pos p;
 	unsigned int rowoff, coloff;
 } Mark;
@@ -829,13 +830,11 @@ gotomark(const Arg *arg)
 	if (!m->b)
 		return;
 	cwin->b = m->b;
-	cwin->row = m->p.row;
-	cwin->col = m->p.col;
+	cwin->row = cwin->orow = m->p.row;
+	cwin->col = cwin->ocol = m->p.col;
 	cwin->rowoff = m->rowoff;
 	cwin->coloff = m->coloff;
-	cwin->l = getln(cwin->l, cwin->orow, cwin->row);
-	cwin->orow = cwin->row;
-	cwin->ocol = cwin->col;
+	cwin->l = m->l;
 }
 
 void
@@ -970,6 +969,7 @@ mark(const Arg *arg)
 		k = pollkey();
 	m = &marks[k];
 	m->b = cwin->b;
+	m->l = cwin->l;
 	m->p.row = cwin->row;
 	m->p.col = cwin->col;
 	m->rowoff = cwin->rowoff;
