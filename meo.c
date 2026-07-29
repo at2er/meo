@@ -1356,6 +1356,7 @@ selword(const Arg *arg)
 	lstart = coltobcol(cwin->l, t.beg.col);
 	lend = coltobcol(cwin->l, t.end.col);
 	search(&ARG(.s = strndup(cwin->l->s.s + lstart, lend - lstart)));
+	matched = cwin->l->s.s + lend;
 }
 
 void
