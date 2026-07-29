@@ -223,6 +223,7 @@ void
 backspace(const Arg *arg)
 {
 	Edit e = {0};
+	Line *l = cwin->l;
 	e.end.row = cwin->row;
 	e.end.col = cwin->col;
 	e.beg = e.end;
@@ -230,6 +231,9 @@ backspace(const Arg *arg)
 	if (e.beg.col == 0) {
 		if (e.beg.row == 0)
 			return;
+		l = lineof(cwin->l->link.prv);
+		e.beg.row--;
+		e.beg.col = ustrlen(l->s.s);
 	} else {
 		e.beg.col--;
 	}
