@@ -52,6 +52,8 @@ typedef struct Buf {
 	struct utilsh_list_head lines, undos;
 	unsigned int nline;
 	char path[FILENAME_MAX];
+
+	unsigned int modified:1;
 } Buf;
 
 typedef struct Cmd {
@@ -355,6 +357,9 @@ setwin:
 void
 cmdquit(int argc, const char *argv[])
 {
+	for (int i = 0; i < bufs.n; i++)
+		if (bufs.e[i]->modified)
+			return;
 	running = 0;
 }
 
@@ -378,6 +383,8 @@ cmdwrite(int argc, const char *argv[])
 	}
 
 	fclose(fp);
+
+	cwin->b->modified = 0;
 }
 
 unsigned int
@@ -430,6 +437,11 @@ drawbar(void)
 	estr_append_cstr(&barbuf, modestr[cmode]);
 	estr_append_chr(&barbuf, ' ');
 	estr_append_cstr(&barbuf, cwin->b->path);
+	estr_append_chr(&barbuf, ' ');
+	if (cwin->b->modified)
+		estr_append_chr(&barbuf, 'm');
+	else
+		estr_append_chr(&barbuf, '-');
 	estr_append_chr(&barbuf, ' ');
 	snprintf(sbuf, BUFSIZ, "%u,%u", cwin->row + 1, cwin->col + 1);
 	estr_append_cstr(&barbuf, sbuf);
@@ -568,6 +580,8 @@ edit(const Edit *e)
 		mode(&ARG(.i = ModeN));
 	if (selected)
 		selected = 0;
+
+	cwin->b->modified = 1;
 
 	return &u->e;
 }
