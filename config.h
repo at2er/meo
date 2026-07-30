@@ -19,6 +19,7 @@ static const char *modestr[] = {
 #define KESC 27
 /* Maybe you need to use KCR */
 #define KLF  10
+#define KSP  32
 
 static const struct key keys_n[] = {
 	{ { 'b'       }, selword,        {.i = -1}     },
@@ -48,13 +49,16 @@ static const struct key keys_n[] = {
 	{ { 'v'       }, mode,           {.i = ModeV}  },
 	{ { 'w'       }, selword,        {.i =  1}     },
 	{ { 'y'       }, yank,           {.i = '+'}    },
-	{ { ':'       }, mode,           {.i = ModeC}  },
+	{ { '$'       }, gotoinline,     {.i =  1}     },
 	{ { '/'       }, mode,           {.i = ModeF}  },
+	{ { ':'       }, mode,           {.i = ModeC}  },
 	{ { '\''      }, gotomark,       {0}           },
+	{ { '0'       }, gotoinline,     {.i = -1}     },
 	{ { CTRL('c') }, cmd,            {.s = "quit"} },
 	{ { CTRL('u') }, movedown,       {.i = -10}    },
 	{ { CTRL('d') }, movedown,       {.i =  10}    },
 	{ { CTRL('z') }, suspend,        {0}           },
+	{ { KSP, 'b'  }, cmd,            {.s = "b #"}  },
 	{ {0},           NULL,           {0}           }
 };
 
@@ -119,13 +123,13 @@ static const struct key *keys[] = {
 };
 
 static const Cmd cmds[] = {
-	// { "b",     cmdbuf   },
-	// { "buf",   cmdbuf   },
-	{ "e",     cmdedit  },
-	{ "edit",  cmdedit  },
-	{ "q",     cmdquit  },
-	{ "quit",  cmdquit  },
-	{ "w",     cmdwrite },
-	{ "write", cmdwrite },
-	{ NULL,    NULL     }
+	{ "b",     cmdbuffer },
+	{ "buf",   cmdbuffer },
+	{ "e",     cmdedit   },
+	{ "edit",  cmdedit   },
+	{ "q",     cmdquit   },
+	{ "quit",  cmdquit   },
+	{ "w",     cmdwrite  },
+	{ "write", cmdwrite  },
+	{ NULL,    NULL      }
 };

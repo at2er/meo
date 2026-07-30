@@ -45,8 +45,19 @@ typedef union arg Arg;
 
 #define lineof(LINK) utilsh_list_container_of(LINK, Line, link)
 #define undoof(LINK) utilsh_list_container_of(LINK, Undo, link)
+#define marktopos(POS, MARK) do { \
+		(POS)->row = (MARK)->row; \
+		(POS)->col = (MARK)->col; \
+	} while (0);
 
 enum { ModeN, ModeC, ModeF, ModeI, ModeV };
+
+typedef struct Mark {
+	struct Buf *b;
+	struct Line *l;
+	unsigned int row, col;
+	unsigned int rowoff, coloff;
+} Mark;
 
 typedef struct Buf {
 	struct utilsh_list_head lines, undos;
@@ -54,6 +65,8 @@ typedef struct Buf {
 	char path[FILENAME_MAX];
 
 	unsigned int modified:1;
+
+	Mark pos;
 } Buf;
 
 typedef struct Cmd {
@@ -81,18 +94,8 @@ typedef struct LineIter {
 	unsigned int lstart, lend, lrow;
 } LineIter;
 
-typedef struct Mark {
-	Buf *b;
-	Line *l;
-	Pos p;
-	unsigned int rowoff, coloff;
-} Mark;
-
 typedef struct Win {
-	Buf *b;
-	Line *l;
-	unsigned int row, rowoff,
-	             col, coloff;
+	Mark p;
 	unsigned int x, y, h, w;
 
 	/* if you set these value without setrow() or else,
@@ -102,6 +105,8 @@ typedef struct Win {
 typedef struct Tab {
 	Win main, bottom;
 	Win *w, *ow;
+
+	Buf *prvb;
 } Tab;
 
 typedef struct Uchr {
@@ -126,7 +131,9 @@ static char sbuf[BUFSIZ], rbuf[BUFSIZ];
 static void backspace(const Arg *arg);
 static int caninsert(void);
 static void change(const Arg *arg);
+static void changebuf(Tab *t, Buf *b);
 static void cmd(const Arg *arg);
+static void cmdbuffer(int argc, const char *argv[]);
 static void cmdedit(int argc, const char *argv[]);
 static void cmdquit(int argc, const char *argv[]);
 static void cmdwrite(int argc, const char *argv[]);
@@ -194,12 +201,13 @@ static Win cmdline;
 static int cmode = ModeN;
 static Tab *ctab;
 #define cwin (ctab->w)
+#define cpos (cwin->p)
 static const char *matched;
 static regmatch_t matches[1];
 static regex_t pattern;
 static int patterncomped;
 static pfds_t pfds;
-static int running;
+static int running, forcequit;
 static int selected;
 static tabs_t tabs;
 
@@ -227,15 +235,15 @@ void
 backspace(const Arg *arg)
 {
 	Edit e = {0};
-	Line *l = cwin->l;
-	e.end.row = cwin->row;
-	e.end.col = cwin->col;
+	Line *l = cpos.l;
+	e.end.row = cpos.row;
+	e.end.col = cpos.col;
 	e.beg = e.end;
 
 	if (e.beg.col == 0) {
 		if (e.beg.row == 0)
 			return;
-		l = lineof(cwin->l->link.prv);
+		l = lineof(cpos.l->link.prv);
 		e.beg.row--;
 		e.beg.col = ustrlen(l->s.s);
 	} else {
@@ -275,6 +283,16 @@ change(const Arg *arg)
 }
 
 void
+changebuf(Tab *t, Buf *b)
+{
+	if ((t->prvb = t->main.p.b))
+		t->prvb->pos = t->main.p;
+	t->main.p = b->pos;
+	t->main.orow = b->pos.row;
+	t->main.ocol = b->pos.col;
+}
+
+void
 cmd(const Arg *arg)
 {
 	darr(char *) args;
@@ -285,10 +303,10 @@ cmd(const Arg *arg)
 		dup = strdup(arg->s);
 	if (cmode == ModeC) {
 		mode(&ARG(.i = ModeN));
-		if (!cmdline.l->s.s[0])
+		if (!cmdline.p.l->s.s[0])
 			return;
 		if (!dup)
-			dup = strdup(cmdline.l->s.s);
+			dup = strdup(cmdline.p.l->s.s);
 	}
 
 	if (!dup)
@@ -308,6 +326,35 @@ cmd(const Arg *arg)
 	}
 
 	c->func(args.n, (const char **)args.e);
+}
+
+void
+cmdbuffer(int argc, const char *argv[])
+{
+	Buf *b = NULL;
+	int idx;
+
+	if (argc <= 1) {
+		//listbuffers();
+		return;
+	}
+
+	if (argc > 1 && argv[1]) {
+		if (*argv[1] == '#' && ctab->prvb) {
+			b = ctab->prvb;
+			goto chbuf;
+		}
+		if ((idx = atoi(argv[1])) >= bufs.n)
+			return;
+		if (idx < 0)
+			return;
+		b = bufs.e[idx];
+	}
+
+	if (!b)
+		return;
+chbuf:
+	changebuf(ctab, b);
 }
 
 void
@@ -346,20 +393,25 @@ cmdedit(int argc, const char *argv[])
 	}
 
 	darr_append(&bufs, b);
+	b->pos.l = lineof(b->lines.beg);
 setwin:
-	ctab->main.b = b;
-	ctab->main.l = lineof(b->lines.beg);
-	ctab->main.row = ctab->main.orow = 0;
-	ctab->main.rowoff = ctab->main.coloff = 0;
-	ctab->main.col = ctab->main.ocol = 0;
+	b->pos.b = b;
+	changebuf(ctab, b);
 }
 
 void
 cmdquit(int argc, const char *argv[])
 {
-	for (int i = 0; i < bufs.n; i++)
-		if (bufs.e[i]->modified)
+	if (forcequit) {
+		running = 0;
+		return;
+	}
+	for (int i = 0; i < bufs.n; i++) {
+		if (bufs.e[i]->modified) {
+			forcequit = 1;
 			return;
+		}
+	}
 	running = 0;
 }
 
@@ -370,21 +422,21 @@ cmdwrite(int argc, const char *argv[])
 	const char *path;
 
 	if (argc <= 1 || !argv[1])
-		path = cwin->b->path;
+		path = cpos.b->path;
 	else
 		path = argv[1];
 
 	if (!(fp = fopen(path, "w")))
 		return;
 
-	list_for_each(Line, l, cwin->b->lines.beg, tmp, link) {
+	list_for_each(Line, l, cpos.b->lines.beg, tmp, link) {
 		fputs(l->s.s, fp);
 		fputc('\n', fp);
 	}
 
 	fclose(fp);
 
-	cwin->b->modified = 0;
+	cpos.b->modified = 0;
 }
 
 unsigned int
@@ -400,10 +452,9 @@ void
 delete(const Arg *arg)
 {
 	Edit e = {0}, *ue;
-	e.beg.col = cwin->col;
-	e.beg.row = cwin->row;
+	marktopos(&e.beg, &cpos);
 	if (selected) {
-		e.end = SELMARK.p;
+		marktopos(&e.end, &SELMARK);
 	} else {
 		e.end = e.beg;
 		e.end.col++;
@@ -422,8 +473,8 @@ draw(void)
 	drawwin(&ctab->main);
 	if (ctab->bottom.h)
 		drawwin(&ctab->bottom);
-	sctui_move(cwin->x + getrx(cwin->l, cwin->col),
-			cwin->y + cwin->row - cwin->rowoff);
+	sctui_move(cwin->x + getrx(cpos.l, cpos.col),
+			cwin->y + cpos.row - cpos.rowoff);
 	sctui_commit();
 }
 
@@ -436,14 +487,14 @@ drawbar(void)
 
 	estr_append_cstr(&barbuf, modestr[cmode]);
 	estr_append_chr(&barbuf, ' ');
-	estr_append_cstr(&barbuf, cwin->b->path);
+	estr_append_cstr(&barbuf, cpos.b->path);
 	estr_append_chr(&barbuf, ' ');
-	if (cwin->b->modified)
+	if (cpos.b->modified)
 		estr_append_chr(&barbuf, 'm');
 	else
 		estr_append_chr(&barbuf, '-');
 	estr_append_chr(&barbuf, ' ');
-	snprintf(sbuf, BUFSIZ, "%u,%u", cwin->row + 1, cwin->col + 1);
+	snprintf(sbuf, BUFSIZ, "%u,%u", cpos.row + 1, cpos.col + 1);
 	estr_append_cstr(&barbuf, sbuf);
 	estr_append_chr(&barbuf, ' ');
 	for (i = 0; i < skb_ncombo; i++)
@@ -496,19 +547,20 @@ void
 drawwin(Win *w)
 {
 	/* shits, don't read it */
-	Line *d = getln(w->l, w->row, w->rowoff);
+	Line *d = getln(w->p.l, w->p.row, w->p.rowoff);
 	LineIter iter;
 	unsigned int nl;
-	int s = selected && w->b == SELMARK.b, selbeg, selend;
-	Pos _beg = SELMARK.p, _end, *beg = &_beg, *end = &_end;
+	int s = selected && w->p.b == SELMARK.b, selbeg, selend;
+	Pos _beg, _end, *beg = &_beg, *end = &_end;
+	marktopos(&_beg, &SELMARK);
 
 	if (s) {
-		_end.row = w->row;
-		_end.col = w->col;
+		_end.row = w->p.row;
+		_end.col = w->p.col;
 		swappos(&beg, &end);
 		iter.beg = *beg;
 		iter.end = *end;
-		iter.lrow = w->rowoff;
+		iter.lrow = w->p.rowoff;
 	}
 
 	for (nl = 0; nl < w->h; nl++, d = lineof(d->link.nex), iter.lrow++) {
@@ -549,14 +601,14 @@ duptoreg(int idx, struct str *s)
 Edit *
 edit(const Edit *e)
 {
-	Undo *u = newundo(cwin->b);
+	Undo *u = newundo(cpos.b);
 	Pos _beg = e->beg, _end = e->end, *beg = &_beg, *end = &_end;
 
 	swappos(&beg, &end);
 
 	setrow(cwin, beg->row);
-	cwin->row = beg->row;
-	cwin->col = beg->col;
+	cpos.row = beg->row;
+	cpos.col = beg->col;
 
 	u->e.beg = u->e.end = *beg;
 	if (beg->row == end->row)
@@ -567,13 +619,12 @@ edit(const Edit *e)
 	if (e->replace.s) {
 		einsert(&e->replace);
 		str_empty(&u->e.replace);
-		u->e.end.row = cwin->row;
-		u->e.end.col = cwin->col;
+		marktopos(&u->e.end, &cpos);
 	}
 
 	if (e->setcursor) {
 		setrow(cwin, e->cursor.row);
-		cwin->col = e->cursor.col;
+		cpos.col = e->cursor.col;
 	}
 
 	if (cmode == ModeV)
@@ -581,7 +632,7 @@ edit(const Edit *e)
 	if (selected)
 		selected = 0;
 
-	cwin->b->modified = 1;
+	cpos.b->modified = 1;
 
 	return &u->e;
 }
@@ -589,26 +640,26 @@ edit(const Edit *e)
 void
 einsert(const struct str *content)
 {
-	unsigned int bcol = coltobcol(cwin->l, cwin->col);
+	unsigned int bcol = coltobcol(cpos.l, cpos.col);
 	const char *s = content->s;
 	struct str tmp, save = {0};
 
-	estr_from_cstr(&save, cwin->l->s.s + bcol);
-	estr_remove(&cwin->l->s, bcol, cwin->l->s.len - bcol);
+	estr_from_cstr(&save, cpos.l->s.s + bcol);
+	estr_remove(&cpos.l->s, bcol, cpos.l->s.len - bcol);
 
 	while ((s = iterstr(&tmp, s))) {
 		if (tmp.len == 1 && tmp.s[0] == '\n') {
-			cwin->orow = ++cwin->row;
-			cwin->col = 0;
-			cwin->l = enewline(cwin->b, cwin->l);
+			cwin->orow = ++cpos.row;
+			cpos.col = 0;
+			cpos.l = enewline(cpos.b, cpos.l);
 		} else {
-			estr_append_str(&cwin->l->s, &tmp);
-			cwin->col += tmp.len;
+			estr_append_str(&cpos.l->s, &tmp);
+			cpos.col += tmp.len;
 		}
 	}
 
 	if (save.s)
-		estr_append_str(&cwin->l->s, &save);
+		estr_append_str(&cpos.l->s, &save);
 
 	str_free(&save);
 }
@@ -621,6 +672,7 @@ enewline(Buf *b, Line *at)
 	Line *l = ecalloc(1, sizeof(*l));
 	list_insert(&b->lines, &at->link, &l->link);
 	b->nline++;
+	estr_from_cstr(&l->s, "");
 	return l;
 }
 
@@ -629,14 +681,14 @@ eremove(struct str *backup, unsigned int beg, unsigned int end)
 {
 	unsigned int bbeg, bend;
 	Pos fbeg, fend; /* fake */
-	Line *l = cwin->l;
+	Line *l = cpos.l;
 
 	if (beg == end)
 		return;
 
 	if (selected == 2 || (end > ustrlen(l->s.s) && l->link.nex)) {
-		fbeg.row = cwin->row;
-		fbeg.col = cwin->col;
+		fbeg.row = cpos.row;
+		fbeg.col = cpos.col;
 		fend.row = fbeg.row + 1;
 		fend.col = 0;
 		eremovem(backup, &fbeg, &fend);
@@ -652,8 +704,8 @@ eremove(struct str *backup, unsigned int beg, unsigned int end)
 void
 eremovem(struct str *backup, Pos *beg, Pos *end)
 {
-	unsigned int bcol = coltobcol(cwin->l, cwin->col);
-	Line *begln = cwin->l, *l, *nex;
+	unsigned int bcol = coltobcol(cpos.l, cpos.col);
+	Line *begln = cpos.l, *l, *nex;
 
 	if (backup) {
 		estr_from_str(backup, &STR(begln->s.s + bcol, begln->s.len - bcol));
@@ -668,7 +720,7 @@ eremovem(struct str *backup, Pos *beg, Pos *end)
 			estr_append_str(backup, &l->s);
 			estr_append_chr(backup, '\n');
 		}
-		removeln(cwin->b, l);
+		removeln(cpos.b, l);
 		l = nex;
 	}
 
@@ -678,14 +730,14 @@ eremovem(struct str *backup, Pos *beg, Pos *end)
 		estr_append_cstr(&begln->s, l->s.s + bcol);
 	if (backup)
 		estr_append_str(backup, &STR(l->s.s, bcol));
-	removeln(cwin->b, l);
+	removeln(cpos.b, l);
 }
 
 void
 findnex(const Arg *arg)
 {
 	uint_least32_t cp;
-	Line *oln = cwin->l;
+	Line *oln = cpos.l;
 	int k = arg->i;
 	size_t ret, off;
 
@@ -695,27 +747,27 @@ findnex(const Arg *arg)
 	mark(&ARG(.i = '\''));
 	selected = 1;
 
-	off = coltobcol(cwin->l, cwin->col);
+	off = coltobcol(cpos.l, cpos.col);
 	while (1) {
-		grapheme_decode_iter(cwin->l->s.s, ret, off, cp) {
+		grapheme_decode_iter(cpos.l->s.s, ret, off, cp) {
 			if ((int)cp == k)
 				goto found;
-			cwin->col++;
+			cpos.col++;
 		}
-		if (!findpassthrough || cwin->row >= cwin->b->nline - 1) {
-			cwin->col = cwin->ocol;
-			cwin->row = cwin->orow;
-			cwin->l = oln;
+		if (!findpassthrough || cpos.row >= cpos.b->nline - 1) {
+			cpos.col = cwin->ocol;
+			cpos.row = cwin->orow;
+			cpos.l = oln;
 			return;
 		}
 		off = 0;
-		cwin->row++;
-		cwin->col = 0;
-		cwin->l = lineof(cwin->l->link.nex);
+		cpos.row++;
+		cpos.col = 0;
+		cpos.l = lineof(cpos.l->link.nex);
 	}
 found:
-	cwin->orow = cwin->row;
-	cwin->ocol = ++cwin->col;
+	cwin->orow = cpos.row;
+	cwin->ocol = ++cpos.col;
 }
 
 void
@@ -723,7 +775,7 @@ findprv(const Arg *arg)
 {
 	unsigned int col, found;
 	uint_least32_t cp;
-	Line *oln = cwin->l;
+	Line *oln = cpos.l;
 	int k = arg->i;
 	size_t ret, off;
 
@@ -734,35 +786,35 @@ findprv(const Arg *arg)
 	selected = 1;
 
 	while (1) {
-		cwin->col = found = off = 0;
-		grapheme_decode_iter(cwin->l->s.s, ret, off, cp) {
+		cpos.col = found = off = 0;
+		grapheme_decode_iter(cpos.l->s.s, ret, off, cp) {
 			if ((int)cp == k) {
-				col = cwin->col;
+				col = cpos.col;
 				found = 1;
 			}
-			if (cwin->col >= cwin->ocol && cwin->row == cwin->orow) {
+			if (cpos.col >= cwin->ocol && cpos.row == cwin->orow) {
 				if (found)
 					goto found;
 				break;
 			}
-			cwin->col++;
+			cpos.col++;
 		}
-		if (found && cwin->row != cwin->orow)
+		if (found && cpos.row != cwin->orow)
 			goto found;
 		found = 0;
-		if (!findpassthrough || cwin->row == 0) {
-			cwin->col = cwin->ocol;
-			cwin->row = cwin->orow;
-			cwin->l = oln;
+		if (!findpassthrough || cpos.row == 0) {
+			cpos.col = cwin->ocol;
+			cpos.row = cwin->orow;
+			cpos.l = oln;
 			return;
 		}
-		cwin->row--;
-		cwin->col = 0;
-		cwin->l = lineof(cwin->l->link.prv);
+		cpos.row--;
+		cpos.col = 0;
+		cpos.l = lineof(cpos.l->link.prv);
 	}
 found:
-	cwin->orow = cwin->row;
-	cwin->ocol = cwin->col = col;
+	cwin->orow = cpos.row;
+	cwin->ocol = cpos.col = col;
 }
 
 Line *
@@ -826,9 +878,9 @@ gotoinfile(const Arg *arg)
 {
 	selected = 0;
 	if (arg->i < 0)
-		cwin->row = 0;
+		cpos.row = 0;
 	else
-		cwin->row = cwin->b->nline - 1;
+		cpos.row = cpos.b->nline - 1;
 }
 
 void
@@ -837,11 +889,11 @@ gotoinline(const Arg *arg)
 	switch (arg->i) {
 	case -1:
 		mark(&ARG(.i = '\''));
-		cwin->col = 0;
+		cpos.col = 0;
 		break;
 	case 1:
 		mark(&ARG(.i = '\''));
-		cwin->col = ustrlen(cwin->l->s.s);
+		cpos.col = ustrlen(cpos.l->s.s);
 		break;
 	}
 	selected = 1;
@@ -872,12 +924,7 @@ gotomark(const Arg *arg)
 	m = &marks[k];
 	if (!m->b)
 		return;
-	cwin->b = m->b;
-	cwin->row = cwin->orow = m->p.row;
-	cwin->col = cwin->ocol = m->p.col;
-	cwin->rowoff = m->rowoff;
-	cwin->coloff = m->coloff;
-	cwin->l = m->l;
+	cpos = *m;
 }
 
 void
@@ -925,8 +972,7 @@ void
 insert(const Arg *arg)
 {
 	Edit e = {0};
-	e.beg.row = cwin->row;
-	e.beg.col = cwin->col;
+	marktopos(&e.beg, &cpos);
 	e.end = e.beg;
 	e.replace.s = (char *)arg->s;
 	e.replace.len = strlen(arg->s);
@@ -999,7 +1045,7 @@ makelniter(LineIter *li, Pos *beg, Pos *end)
 	li->beg = *beg;
 	li->end = *end;
 
-	li->l = li->nex = getln(cwin->l, cwin->row, li->beg.row);
+	li->l = li->nex = getln(cpos.l, cpos.row, li->beg.row);
 	li->lrow = li->beg.row;
 }
 
@@ -1011,12 +1057,7 @@ mark(const Arg *arg)
 	if (k == 0)
 		k = pollkey();
 	m = &marks[k];
-	m->b = cwin->b;
-	m->l = cwin->l;
-	m->p.row = cwin->row;
-	m->p.col = cwin->col;
-	m->rowoff = cwin->rowoff;
-	m->coloff = cwin->coloff;
+	*m = cpos;
 }
 
 const Cmd *
@@ -1038,8 +1079,8 @@ mode(const Arg *arg)
 	case ModeC: case ModeF:
 		ctab->ow = cwin;
 		cwin = &cmdline;
-		cwin->col = 0;
-		estr_clean(&cmdline.l->s);
+		cpos.col = 0;
+		estr_clean(&cmdline.p.l->s);
 		break;
 	case ModeV:
 		if (!selected)
@@ -1062,34 +1103,34 @@ void
 movedown(const Arg *arg)
 {
 	selected = 0;
-	if (arg->i < 0 && cwin->row < (unsigned int)-arg->i)
-		cwin->row = 0;
+	if (arg->i < 0 && cpos.row < (unsigned int)-arg->i)
+		cpos.row = 0;
 	else
-		cwin->row += arg->i;
-	if (cwin->row >= cwin->b->nline)
-		cwin->row = cwin->b->nline - 1;
+		cpos.row += arg->i;
+	if (cpos.row >= cpos.b->nline)
+		cpos.row = cpos.b->nline - 1;
 }
 
 void
 moveright(const Arg *arg)
 {
 	selected = 0;
-	if (cwin->col == 0 && arg->i < 0)
+	if (cpos.col == 0 && arg->i < 0)
 		return;
-	cwin->col += arg->i;
+	cpos.col += arg->i;
 }
 
 void
 newline(const Arg *arg)
 {
 	Edit e = {0};
-	e.beg.row = cwin->row;
+	e.beg.row = cpos.row;
 	if (arg->i < 0) {
 		e.beg.col = 0;
 		e.cursor = e.beg;
 		e.setcursor = 1;
 	} else {
-		e.beg.col = ustrlen(cwin->l->s.s) + 1;
+		e.beg.col = ustrlen(cpos.l->s.s) + 1;
 	}
 	e.end = e.beg;
 	estr_from_cstr(&e.replace, "\n");
@@ -1142,37 +1183,37 @@ void
 nexmatch(const Arg *arg)
 {
 	Pos beg, end;
-	unsigned int off = 0, orow = cwin->row;
-	Line *oln = cwin->l;
+	unsigned int off = 0, orow = cpos.row;
+	Line *oln = cpos.l;
 
 	if (!patterncomped)
 		return;
 
-	if (!(matched && RANGE(matched, cwin->l->s.s, cwin->l->s.s + cwin->l->s.len)))
-		matched = cwin->l->s.s;
+	if (!(matched && RANGE(matched, cpos.l->s.s, cpos.l->s.s + cpos.l->s.len)))
+		matched = cpos.l->s.s;
 	while (1) { 
 		if (!regexec(&pattern, matched, 1, matches, 0))
 			goto matched;
 		movedown(&ARG(.i = arg->i));
-		if (cwin->orow == cwin->row)
+		if (cwin->orow == cpos.row)
 			break;
-		cwin->l = getln(cwin->l, cwin->orow, cwin->row);
-		cwin->orow = cwin->row;
-		matched = cwin->l->s.s;
+		cpos.l = getln(cpos.l, cwin->orow, cpos.row);
+		cwin->orow = cpos.row;
+		matched = cpos.l->s.s;
 	}
 
 	matched = NULL;
-	cwin->row = cwin->orow = orow;
-	cwin->l = oln;
+	cpos.row = cwin->orow = orow;
+	cpos.l = oln;
 	return;
 matched:
-	beg.row = end.row = cwin->row;
-	if (matched != cwin->l->s.s)
-		off = matched - cwin->l->s.s;
-	beg.col = bcoltocol(cwin->l, matches[0].rm_so + off);
-	end.col = bcoltocol(cwin->l, matches[0].rm_eo + off);
+	beg.row = end.row = cpos.row;
+	if (matched != cpos.l->s.s)
+		off = matched - cpos.l->s.s;
+	beg.col = bcoltocol(cpos.l, matches[0].rm_so + off);
+	end.col = bcoltocol(cpos.l, matches[0].rm_eo + off);
 	sel(&beg, &end);
-	matched = cwin->l->s.s + matches[0].rm_eo + off;
+	matched = cpos.l->s.s + matches[0].rm_eo + off;
 }
 
 void
@@ -1189,9 +1230,8 @@ paste(const Arg *arg)
 		return;
 	}
 
-	e.beg.row = cwin->row;
-	e.beg.col = cwin->col;
-	e.end = SELMARK.p;
+	marktopos(&e.beg, &cpos);
+	marktopos(&e.end, &SELMARK);
 	e.replace.s = str;
 	if (str)
 		e.replace.len = strlen(str);
@@ -1222,7 +1262,7 @@ void
 redo(const Arg *arg)
 {
 	Edit e;
-	struct utilsh_list_head *undos = &cwin->b->undos;
+	struct utilsh_list_head *undos = &cpos.b->undos;
 	Undo *u;
 
 	if (undos->end) {
@@ -1308,10 +1348,10 @@ search(const Arg *arg)
 		dup = strdup(arg->s);
 	if (cmode == ModeF) {
 		mode(&ARG(.i = ModeN));
-		if (!cmdline.l->s.s[0])
+		if (!cmdline.p.l->s.s[0])
 			return;
 		if (!dup)
-			dup = strdup(cmdline.l->s.s);
+			dup = strdup(cmdline.p.l->s.s);
 	}
 
 	patterncomped = 0;
@@ -1336,9 +1376,9 @@ sel(Pos *beg, Pos *end)
 void
 selline(const Arg *arg)
 {
-	cwin->col = 0;
+	cpos.col = 0;
 	mark(&ARG(.i = '\''));
-	cwin->col = ustrlen(cwin->l->s.s);
+	cpos.col = ustrlen(cpos.l->s.s);
 	selected = 2; /* to delete the whole line */
 }
 
@@ -1347,40 +1387,39 @@ selword(const Arg *arg)
 {
 	unsigned int lstart, lend;
 	TextObj t = {0};
-	t.beg.row = cwin->row;
-	t.beg.col = cwin->col;
-	t.begln = cwin->l;
+	marktopos(&t.beg, &cpos);
+	t.begln = cpos.l;
 	if (!textobj_get(&t, arg->i))
 		return;
 	sel(&t.beg, &t.end);
-	lstart = coltobcol(cwin->l, t.beg.col);
-	lend = coltobcol(cwin->l, t.end.col);
-	search(&ARG(.s = strndup(cwin->l->s.s + lstart, lend - lstart)));
-	matched = cwin->l->s.s + lend;
+	lstart = coltobcol(cpos.l, t.beg.col);
+	lend = coltobcol(cpos.l, t.end.col);
+	search(&ARG(.s = strndup(cpos.l->s.s + lstart, lend - lstart)));
+	matched = cpos.l->s.s + lend;
 }
 
 void
 setcol(Win *w, unsigned int col)
 {
-	w->col = align(col, 0, ustrlen(w->l->s.s));
-	if (w->col < w->coloff)
-		w->coloff = w->col;
-	else if (w->col >= w->coloff + scrw)
-		w->coloff = w->col - scrw + 1;
-	w->ocol = w->col;
+	w->p.col = align(col, 0, ustrlen(w->p.l->s.s));
+	if (w->p.col < w->p.coloff)
+		w->p.coloff = w->p.col;
+	else if (w->p.col >= w->p.coloff + scrw)
+		w->p.coloff = w->p.col - scrw + 1;
+	w->ocol = w->p.col;
 }
 
 void
 setrow(Win *w, unsigned int row)
 {
-	w->row = align(row, 0, w->b->nline - 1);
-	if (w->row < w->rowoff)
-		w->rowoff = w->row;
-	else if (w->row >= w->rowoff + w->h)
-		w->rowoff = w->row - w->h + 1;
-	w->l = getln(w->l, w->orow, w->row);
-	setcol(w, w->col);
-	w->orow = w->row;
+	w->p.row = align(row, 0, w->p.b->nline - 1);
+	if (w->p.row < w->p.rowoff)
+		w->p.rowoff = w->p.row;
+	else if (w->p.row >= w->p.rowoff + w->h)
+		w->p.rowoff = w->p.row - w->h + 1;
+	w->p.l = getln(w->p.l, w->orow, w->p.row);
+	setcol(w, w->p.col);
+	w->orow = w->p.row;
 }
 
 void
@@ -1412,7 +1451,7 @@ undo(const Arg *arg)
 {
 	Edit e; /* a copy, we need */
 	struct utilsh_list *prv;
-	struct utilsh_list_head *undos = &cwin->b->undos;
+	struct utilsh_list_head *undos = &cpos.b->undos;
 	Undo *u;
 
 	if (!undos->end)
@@ -1432,8 +1471,8 @@ void
 update(Tab *t)
 {
 	if (t->bottom.h)
-		setrow(&t->bottom, t->bottom.row);
-	setrow(&t->main, t->main.row);
+		setrow(&t->bottom, t->bottom.p.row);
+	setrow(&t->main, t->main.p.row);
 }
 
 void
@@ -1456,14 +1495,13 @@ yank(const Arg *arg)
 	unsigned int lstart, lend;
 	struct str tmp;
 
-	if (!selected || cwin->b != SELMARK.b)
+	if (!selected || cpos.b != SELMARK.b)
 		return;
 
 	str_empty(&tmp);
 
-	beg = SELMARK.p;
-	end.row = cwin->row;
-	end.col = cwin->col;
+	marktopos(&beg, &SELMARK);
+	marktopos(&end, &cpos);
 	makelniter(&iter, &beg, &end);
 	while (iterln(&iter)) {
 		lstart = coltobcol(iter.l, iter.lstart);
@@ -1471,7 +1509,7 @@ yank(const Arg *arg)
 		estr_append_str(&tmp, &STR(iter.l->s.s + lstart, lend - lstart));
 		if (beg.row == end.row)
 			break;
-		if (lend >= iter.l->s.len)
+		if (selected == 2 || lend >= iter.l->s.len)
 			estr_append_chr(&tmp, '\n');
 	}
 
@@ -1520,8 +1558,8 @@ main(int argc, char *argv[])
 	str_empty(&barbuf);
 
 	initcmdbuf();
-	cmdline.b = &cmdbuf;
-	cmdline.l = lineof(cmdbuf.lines.beg);
+	cmdline.p.b = &cmdbuf;
+	cmdline.p.l = lineof(cmdbuf.lines.beg);
 	cmdline.x = 0;
 	cmdline.y = scrh;
 	cmdline.h = 1;
