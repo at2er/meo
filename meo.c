@@ -944,6 +944,8 @@ gotomark(const Arg *arg)
 	if (!m->b)
 		return;
 	cpos = *m;
+	cwin->orow = m->row;
+	cwin->ocol = m->col;
 }
 
 void
