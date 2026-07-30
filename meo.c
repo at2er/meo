@@ -150,6 +150,7 @@ static void einsert(const struct str *content);
 static Line *enewline(Buf *b, Line *at);
 static void eremove(struct str *backup, unsigned int beg, unsigned int end);
 static void eremovem(struct str *backup, Pos *beg, Pos *end);
+static void execreg(const Arg *arg);
 static void findnex(const Arg *arg);
 static void findprv(const Arg *arg);
 static Line *freadline(FILE *fp);
@@ -177,6 +178,8 @@ static void nexmatch(const Arg *arg);
 static void paste(const Arg *arg);
 static void pollev(void);
 static int pollkey(void);
+static int pollkeyev(void); /* poll key event only */
+static void record(const Arg *arg);
 static void redo(const Arg *arg);
 static void removeln(Buf *b, Line *l);
 static size_t renderchr(Uchr *uc, const char *s);
@@ -211,6 +214,9 @@ static int running, forcequit;
 static int selected;
 static tabs_t tabs;
 
+static int recording, executing;
+static size_t executingpos;
+
 /* events */
 static int keyev;
 
@@ -221,7 +227,7 @@ static Mark marks[UCHAR_MAX];
 
 /* '"': clipboard
  * '.': last action */
-static char *regs[UCHAR_MAX];
+static struct str regs[UCHAR_MAX];
 #define CLIPREG regs['"']
 #define DOTREG  regs['.']
 
@@ -236,8 +242,7 @@ backspace(const Arg *arg)
 {
 	Edit e = {0};
 	Line *l = cpos.l;
-	e.end.row = cpos.row;
-	e.end.col = cpos.col;
+	marktopos(&e.end, &cpos);
 	e.beg = e.end;
 
 	if (e.beg.col == 0) {
@@ -487,6 +492,11 @@ drawbar(void)
 
 	estr_append_cstr(&barbuf, modestr[cmode]);
 	estr_append_chr(&barbuf, ' ');
+	if (recording) {
+		strcpy(sbuf, "[@_] ");
+		sbuf[2] = recording;
+		estr_append_cstr(&barbuf, sbuf);
+	}
 	estr_append_cstr(&barbuf, cpos.b->path);
 	estr_append_chr(&barbuf, ' ');
 	if (cpos.b->modified)
@@ -587,10 +597,9 @@ drawwin(Win *w)
 void
 duptoreg(int idx, struct str *s)
 {
-	char **reg = &regs[idx];
-	if (*reg)
-		free(*reg);
-	*reg = strndup(s->s, s->len);
+	struct str *reg = &regs[idx];
+	str_free(reg);
+	estr_from_str(reg, s);
 
 	if (idx == '+')
 		clipboard_set(s);
@@ -731,6 +740,16 @@ eremovem(struct str *backup, Pos *beg, Pos *end)
 	if (backup)
 		estr_append_str(backup, &STR(l->s.s, bcol));
 	removeln(cpos.b, l);
+}
+
+void
+execreg(const Arg *arg)
+{
+	int k = arg->i;
+	if (!k)
+		k = pollkey();
+	executing = k;
+	executingpos = 0;
 }
 
 void
@@ -1220,7 +1239,7 @@ void
 paste(const Arg *arg)
 {
 	Edit e = {0};
-	char *str = regs[arg->i];
+	char *str = regs[arg->i].s;
 	struct str tmp;
 	if (arg->i == '+' && !clipboard_get(&tmp))
 		str = tmp.s;
@@ -1242,10 +1261,19 @@ void
 pollev(void)
 {
 	keyev = 0;
+
+	if (executing) {
+		keyev = regs[executing].s[executingpos++];
+		if (executingpos >= regs[executing].len)
+			executing = 0;
+		/* skip poll(), because current [keyev] need handle. */
+		return;
+	}
+
 	if (poll(pfds.e, pfds.n, -1) == -1 && errno != EINTR)
 		die("poll()");
-	if (pfds.e[0].revents & POLLIN)
-		keyev = sctui_grab_key();
+
+	keyev = pollkeyev();
 }
 
 int
@@ -1256,6 +1284,36 @@ pollkey(void)
 	while (!keyev)
 		pollev();
 	return keyev;
+}
+
+int
+pollkeyev(void)
+{
+	struct str *reg;
+
+	if (pfds.e[0].revents & POLLIN) {
+		keyev = sctui_grab_key();
+		if (recording) {
+			reg = &regs[recording];
+			estr_append_chr(reg, keyev);
+		}
+	}
+
+	return keyev;
+}
+
+void
+record(const Arg *arg)
+{
+	int k = arg->i;
+	if (recording) {
+		estr_remove(&regs[recording], regs[recording].len - 1, 1);
+		recording = 0;
+		return;
+	}
+	if (!k)
+		k = pollkey();
+	recording = k;
 }
 
 void
