@@ -192,6 +192,8 @@ static void setcol(Win *w, unsigned int col);
 static void setrow(Win *w, unsigned int row);
 static void suspend(const Arg *arg);
 static void swappos(Pos **beg, Pos **end);
+static void tillnex(const Arg *arg);
+static void tillprv(const Arg *arg);
 static void undo(const Arg *arg);
 static void update(Tab *t);
 static void updatewins(Tab *t);
@@ -755,85 +757,35 @@ execreg(const Arg *arg)
 void
 findnex(const Arg *arg)
 {
-	uint_least32_t cp;
-	Line *oln = cpos.l;
 	int k = arg->i;
-	size_t ret, off;
+	TextObj t = {0};
 
 	if (k == 0)
 		k = pollkey();
 
-	mark(&ARG(.i = '\''));
-	selected = 1;
+	marktopos(&t.beg, &cpos);
+	t.begln = cpos.l;
+	if (!textobj_find_nex(k, &t))
+		return;
 
-	off = coltobcol(cpos.l, cpos.col);
-	while (1) {
-		grapheme_decode_iter(cpos.l->s.s, ret, off, cp) {
-			if ((int)cp == k)
-				goto found;
-			cpos.col++;
-		}
-		if (!findpassthrough || cpos.row >= cpos.b->nline - 1) {
-			cpos.col = cwin->ocol;
-			cpos.row = cwin->orow;
-			cpos.l = oln;
-			return;
-		}
-		off = 0;
-		cpos.row++;
-		cpos.col = 0;
-		cpos.l = lineof(cpos.l->link.nex);
-	}
-found:
-	cwin->orow = cpos.row;
-	cwin->ocol = ++cpos.col;
+	sel(&t.abeg, &t.aend);
 }
 
 void
 findprv(const Arg *arg)
 {
-	unsigned int col, found;
-	uint_least32_t cp;
-	Line *oln = cpos.l;
 	int k = arg->i;
-	size_t ret, off;
+	TextObj t = {0};
 
 	if (k == 0)
 		k = pollkey();
 
-	mark(&ARG(.i = '\''));
-	selected = 1;
+	marktopos(&t.beg, &cpos);
+	t.begln = cpos.l;
+	if (!textobj_find_prv(k, &t))
+		return;
 
-	while (1) {
-		cpos.col = found = off = 0;
-		grapheme_decode_iter(cpos.l->s.s, ret, off, cp) {
-			if ((int)cp == k) {
-				col = cpos.col;
-				found = 1;
-			}
-			if (cpos.col >= cwin->ocol && cpos.row == cwin->orow) {
-				if (found)
-					goto found;
-				break;
-			}
-			cpos.col++;
-		}
-		if (found && cpos.row != cwin->orow)
-			goto found;
-		found = 0;
-		if (!findpassthrough || cpos.row == 0) {
-			cpos.col = cwin->ocol;
-			cpos.row = cwin->orow;
-			cpos.l = oln;
-			return;
-		}
-		cpos.row--;
-		cpos.col = 0;
-		cpos.l = lineof(cpos.l->link.prv);
-	}
-found:
-	cwin->orow = cpos.row;
-	cwin->ocol = cpos.col = col;
+	sel(&t.abeg, &t.aend);
 }
 
 Line *
@@ -922,7 +874,7 @@ void
 gotoline(const Arg *arg)
 {
 	const char *c = arg->s;
-	unsigned int row;
+	unsigned int row = 0;
 	for (; *c; c++) {
 		if (*c < '0' || *c > '9')
 			return;
@@ -1451,9 +1403,9 @@ selword(const Arg *arg)
 	t.begln = cpos.l;
 	if (!textobj_get(&t, arg->i))
 		return;
-	sel(&t.beg, &t.end);
-	lstart = coltobcol(cpos.l, t.beg.col);
-	lend = coltobcol(cpos.l, t.end.col);
+	sel(&t.abeg, &t.aend);
+	lstart = coltobcol(cpos.l, t.abeg.col);
+	lend = coltobcol(cpos.l, t.aend.col);
 	search(&ARG(.s = strndup(cpos.l->s.s + lstart, lend - lstart)));
 	matched = cpos.l->s.s + lend;
 }
@@ -1504,6 +1456,40 @@ swappos(Pos **beg, Pos **end)
 		*beg = e;
 		*end = b;
 	}
+}
+
+void
+tillnex(const Arg *arg)
+{
+	int k = arg->i;
+	TextObj t = {0};
+
+	if (k == 0)
+		k = pollkey();
+
+	marktopos(&t.beg, &cpos);
+	t.begln = cpos.l;
+	if (!textobj_find_nex(k, &t))
+		return;
+
+	sel(&t.ibeg, &t.iend);
+}
+
+void
+tillprv(const Arg *arg)
+{
+	int k = arg->i;
+	TextObj t = {0};
+
+	if (k == 0)
+		k = pollkey();
+
+	marktopos(&t.beg, &cpos);
+	t.begln = cpos.l;
+	if (!textobj_find_prv(k, &t))
+		return;
+
+	sel(&t.ibeg, &t.iend);
 }
 
 void
