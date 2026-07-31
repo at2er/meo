@@ -1553,10 +1553,10 @@ yank(const Arg *arg)
 		lstart = coltobcol(iter.l, iter.lstart);
 		lend = coltobcol(iter.l, iter.lend);
 		estr_append_str(&tmp, &STR(iter.l->s.s + lstart, lend - lstart));
-		if (beg.row == end.row)
-			break;
 		if (selected == 2 || lend >= iter.l->s.len)
 			estr_append_chr(&tmp, '\n');
+		if (beg.row == end.row)
+			break;
 	}
 
 	duptoreg(arg->i, &tmp);
