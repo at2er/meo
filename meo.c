@@ -190,8 +190,10 @@ static void selline(const Arg *arg);
 static void selword(const Arg *arg);
 static void setcol(Win *w, unsigned int col);
 static void setrow(Win *w, unsigned int row);
+static void settomark(Mark *m);
 static void suspend(const Arg *arg);
 static void swappos(Pos **beg, Pos **end);
+static void swapsel(const Arg *arg);
 static void tillnex(const Arg *arg);
 static void tillprv(const Arg *arg);
 static void undo(const Arg *arg);
@@ -902,13 +904,7 @@ gotomark(const Arg *arg)
 	if (k == 0)
 		k = pollkey();
 	m = &marks[k];
-	if (!m->b)
-		return;
-	cpos = *m;
-	if (m->b->ldirty)
-		cpos.l = m->l = getln(lineof(m->b->lines.beg), 0, m->row);
-	cwin->orow = m->row;
-	cwin->ocol = m->col;
+	settomark(m);
 }
 
 void
@@ -1204,15 +1200,24 @@ void
 paste(const Arg *arg)
 {
 	Edit e = {0};
-	char *str = regs[arg->i].s;
+	int k = arg->i;
+	char *str;
 	struct str tmp;
-	if (arg->i == '+' && !clipboard_get(&tmp))
+
+	if (!k)
+		k = pollkey();
+
+	str = regs[k].s;
+	if (k == '+' && !clipboard_get(&tmp))
 		str = tmp.s;
 
 	if (cmode != ModeV && str) {
 		insert(&ARG(.s = str));
 		return;
 	}
+
+	if (cmode != ModeV)
+		return;
 
 	marktopos(&e.beg, &cpos);
 	marktopos(&e.end, &SELMARK);
@@ -1448,6 +1453,18 @@ setrow(Win *w, unsigned int row)
 }
 
 void
+settomark(Mark *m)
+{
+	if (!m->b)
+		return;
+	cpos = *m;
+	if (m->b->ldirty)
+		cpos.l = m->l = getln(lineof(m->b->lines.beg), 0, m->row);
+	cwin->orow = m->row;
+	cwin->ocol = m->col;
+}
+
+void
 suspend(const Arg *arg)
 {
 	sctui_fini();
@@ -1469,6 +1486,14 @@ swappos(Pos **beg, Pos **end)
 		*beg = e;
 		*end = b;
 	}
+}
+
+void
+swapsel(const Arg *arg)
+{
+	Mark save = cpos;
+	settomark(&SELMARK);
+	SELMARK = save;
 }
 
 void
