@@ -142,7 +142,9 @@ static void delete(const Arg *arg);
 static void draw(void);
 static void drawbar(void);
 static void drawcmdline(void);
-static void drawline(struct str *s, unsigned int x, int selbeg, int selend);
+static void drawline(struct str *s,
+		unsigned int x, unsigned int coloff,
+		int selbeg, int selend);
 static void drawwin(Win *w);
 static void duptoreg(int idx, struct str *s);
 static Edit *edit(const Edit *e);
@@ -482,7 +484,7 @@ draw(void)
 	drawwin(&ctab->main);
 	if (ctab->bottom.h)
 		drawwin(&ctab->bottom);
-	sctui_move(cwin->x + getrx(cpos.l, cpos.col),
+	sctui_move(cwin->x + getrx(cpos.l, cpos.col - cpos.coloff),
 			cwin->y + cpos.row - cpos.rowoff);
 	sctui_commit();
 }
@@ -519,7 +521,7 @@ drawbar(void)
 
 	sctui_out(sctui_attr_on(barattr), 0);
 	sctui_move(0, scrh);
-	drawline(&barbuf, scrw, -1, -1);
+	drawline(&barbuf, scrw, 0, -1, -1);
 	sctui_out(sctui_attr_off(), 0);
 
 	estr_clean(&barbuf);
@@ -532,10 +534,11 @@ drawcmdline(void)
 }
 
 void
-drawline(struct str *s, unsigned int w, int selbeg, int selend)
+drawline(struct str *s, unsigned int w, unsigned int coloff,
+		int selbeg, int selend)
 {
 	int i;
-	unsigned int wsum = 0;
+	unsigned int wsum = 0, count = 0;
 	size_t ret, off;
 	Uchr uc;
 
@@ -544,6 +547,12 @@ drawline(struct str *s, unsigned int w, int selbeg, int selend)
 			sctui_out(sctui_attr_on(selattr), 0);
 		else if (i == selend)
 			sctui_out(sctui_attr_off(), 0);
+		if (count < coloff) {
+			count += uc.w;
+			for (int j = count - coloff; j > 0; j--, count--)
+				sctui_outc(' ');
+			continue;
+		}
 		wsum += uc.w;
 		if (wsum > w)
 			return;
@@ -586,7 +595,7 @@ drawwin(Win *w)
 		} else {
 			selbeg = selend = -1;
 		}
-		drawline(&d->s, w->w, selbeg, selend);
+		drawline(&d->s, w->w, w->p.coloff, selbeg, selend);
 		if (!d->link.nex)
 			break;
 	}
@@ -1434,8 +1443,8 @@ setcol(Win *w, unsigned int col)
 	w->p.col = align(col, 0, ustrlen(w->p.l->s.s));
 	if (w->p.col < w->p.coloff)
 		w->p.coloff = w->p.col;
-	else if (w->p.col >= w->p.coloff + scrw)
-		w->p.coloff = w->p.col - scrw + 1;
+	else if (w->p.col >= w->p.coloff + w->w)
+		w->p.coloff = w->p.col - w->w + 1;
 	w->ocol = w->p.col;
 }
 
