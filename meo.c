@@ -64,7 +64,7 @@ typedef struct Buf {
 	unsigned int nline;
 	char path[FILENAME_MAX];
 
-	unsigned int modified:1;
+	unsigned int ldirty:1, modified:1;
 
 	Mark pos;
 } Buf;
@@ -735,6 +735,15 @@ eremovem(struct str *backup, Pos *beg, Pos *end)
 		l = nex;
 	}
 
+	if (!l) {
+		cpos.l = lineof(begln->link.prv);
+		cwin->orow = --cpos.row;
+		cwin->ocol = cpos.col = ustrlen(cpos.l->s.s);
+		l = begln;
+		removeln(cpos.b, l);
+		return;
+	}
+
 	/* l == e->end.row */
 	bcol = coltobcol(l, end->col);
 	if (bcol < l->s.len)
@@ -896,6 +905,8 @@ gotomark(const Arg *arg)
 	if (!m->b)
 		return;
 	cpos = *m;
+	if (m->b->ldirty)
+		cpos.l = m->l = getln(lineof(m->b->lines.beg), 0, m->row);
 	cwin->orow = m->row;
 	cwin->ocol = m->col;
 }
@@ -1268,6 +1279,7 @@ record(const Arg *arg)
 	if (!k)
 		k = pollkey();
 	recording = k;
+	str_clean(&regs[recording]);
 }
 
 void
@@ -1298,6 +1310,7 @@ removeln(Buf *b, Line *l)
 	list_remove(&b->lines, &l->link);
 	str_free(&l->s);
 	free(l);
+	b->ldirty = 1;
 	b->nline--;
 }
 
