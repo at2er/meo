@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: MIT */
 static int barattr = 0;
 static unsigned int findpassthrough = 1;
 static int nonprintattr = SCTUI_REVERSE;

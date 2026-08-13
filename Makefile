@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: MIT */
 include config.mk
 
 SRC = meo.c utils.c $(wildcard include/*.c)

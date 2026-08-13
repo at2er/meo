@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: MIT */
 #define CLIPBOARD_READ_BUF sbuf
 
 static const char *clipboard_wlcopycmd[] = {"wl-copy", NULL};

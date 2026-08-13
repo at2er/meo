@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-3.0-or-later */
 static TextObj *textobj_get_ident(TextObj *t, int direction);
 
 TextObj *

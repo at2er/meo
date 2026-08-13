@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-3.0-or-later */
 typedef struct TextObj {
 	Pos beg;
 	Line *begln;
