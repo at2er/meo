@@ -102,7 +102,7 @@ extern const char *sctui_attr_on(int attr);
 
 extern void sctui_clear(void);
 extern void sctui_commit(void);
-extern void sctui_fill_space(char *str, int len, int w);
+extern int sctui_fill_space(char *str, int beg, int end, int max);
 extern void sctui_fini(void);
 extern int  sctui_grab_key(void);
 extern void sctui_init(void);
@@ -217,11 +217,18 @@ sctui_commit(void)
 	global_sctui.bufp = 0;
 }
 
-void
-sctui_fill_space(char *str, int len, int w)
+int
+sctui_fill_space(char *str, int beg, int end, int max)
 {
-	for (int i = len; i < w; i++)
+	int i = beg;
+	for (; i < end && i < max; i++)
 		str[i] = ' ';
+	if (i == max - 1) {
+		str[i - 1] = '\0';
+		return i;
+	}
+	str[i++] = '\0';
+	return i;
 }
 
 void
@@ -281,6 +288,9 @@ sctui_out(const char *str, int len)
 		sctui_commit();
 	memcpy(global_sctui.buf + global_sctui.bufp, str, len);
 	global_sctui.bufp += len;
+#ifdef SCTUI_DEBUG
+	sctui_commit();
+#endif
 }
 
 void
@@ -290,6 +300,9 @@ sctui_outc(char c)
 		sctui_commit();
 	global_sctui.buf[global_sctui.bufp] = c;
 	global_sctui.bufp += 1;
+#ifdef SCTUI_DEBUG
+	sctui_commit();
+#endif
 }
 
 void

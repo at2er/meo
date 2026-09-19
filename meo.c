@@ -521,7 +521,7 @@ drawbar(void)
 		estr_append_str(&barbuf, &STR(sbuf + off, uc.blen));
 
 	sctui_out(sctui_attr_on(barattr), 0);
-	sctui_move(0, scrh);
+	sctui_move(0, scrh - 1);
 	drawline(&barbuf, scrw, 0, -1, -1);
 	sctui_out(sctui_attr_off(), 0);
 
@@ -601,7 +601,7 @@ drawwin(Win *w)
 			break;
 	}
 
-	sctui_fill_space(rbuf, 0, w->w);
+	sctui_fill_space(rbuf, 0, w->w, sizeof(rbuf));
 	for (nl++; nl < w->h; nl++) {
 		sctui_move(w->x, w->y + nl);
 		sctui_out(rbuf, 0);
