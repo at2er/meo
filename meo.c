@@ -1444,8 +1444,11 @@ setcol(Win *w, unsigned int col)
 	w->p.col = align(col, 0, ustrlen(w->p.l->s.s));
 	if (w->p.col < w->p.coloff)
 		w->p.coloff = w->p.col;
-	else if (w->p.col >= w->p.coloff + w->w)
-		w->p.coloff = w->p.col - w->w + 1;
+	else {
+		col = getrx(w->p.l, w->p.col);
+		if (col >= w->p.coloff + w->w)
+			w->p.coloff = col - w->w + 1;
+	}
 	w->ocol = w->p.col;
 }
 
