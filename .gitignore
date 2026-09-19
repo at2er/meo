@@ -1,4 +1,5 @@
 compile_commands.json
+debug.mk
 meo
 Session.vim
 .cache
