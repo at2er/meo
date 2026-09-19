@@ -664,6 +664,8 @@ void
 einsert(const struct str *content)
 {
 	unsigned int bcol = coltobcol(cpos.l, cpos.col);
+	uint_least32_t cp;
+	size_t ret, off = 0;
 	const char *s = content->s;
 	struct str tmp, save = {0};
 
@@ -677,7 +679,8 @@ einsert(const struct str *content)
 			cpos.l = enewline(cpos.b, cpos.l);
 		} else {
 			estr_append_str(&cpos.l->s, &tmp);
-			cpos.col += tmp.len;
+			grapheme_decode_iter(tmp.s, ret, off, cp)
+				cpos.col++;
 		}
 	}
 
