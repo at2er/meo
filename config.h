@@ -93,11 +93,14 @@ static const struct key keys_f[] = {
 };
 
 static const struct key keys_i[] = {
-	{ { 'j', 'k'  }, mode,           {.i = ModeN}  },
+	{ { 'j', 'j'  }, insert,         {.s = "j"}    },
+	{ { 'j', 'l'  }, mode,           {.i = ModeN}  },
 	{ { CTRL('b') }, moveright,      {.i = -1}     },
 	{ { CTRL('c') }, mode,           {.i = ModeN}  },
+	{ { CTRL('d') }, delete,         {.i = '+'}    },
 	{ { CTRL('f') }, moveright,      {.i =  1}     },
 	{ { CTRL('h') }, backspace,      {0}           },
+	{ { CTRL('m') }, mark,           {0}           },
 	{ { CTRL('n') }, movedown,       {.i =  1}     },
 	{ { CTRL('p') }, movedown,       {.i = -1}     },
 	{ { CTRL('r') }, paste,          {0}           },
