@@ -1246,9 +1246,11 @@ pollev(void)
 	keyev = 0;
 
 	if (executing) {
-		keyev = regs[executing].s[executingpos++];
-		if (executingpos >= regs[executing].len)
+		if (executingpos >= regs[executing].len) {
 			executing = 0;
+			return;
+		}
+		keyev = regs[executing].s[executingpos++];
 		/* skip poll(), because current [keyev] need handle. */
 		return;
 	}
